@@ -1,13 +1,13 @@
-# Minecraft Performance Optimization Guide
+# Legends Launcher Optimization Guide
 
-This guide provides comprehensive tuning recommendations to eliminate stutter and maximize FPS stability in Minecraft.
+This guide provides comprehensive tuning recommendations to eliminate stutter, maximize FPS stability, and squeeze every ounce of performance out of Minecraft. The Legends Launcher automatically applies many of these settings out of the box.
 
 ## TL;DR — Priority Order
 
-The biggest wins (in order):
-1. **Aikar's GC Flags** — reduces GC pause stutter
-2. **Sodium mod** — GPU acceleration
-3. **Correct RAM allocation** — prevents memory pressure issues
+The biggest performance wins (in order):
+1. **Aikar's GC Flags** — Reduces Garbage Collection (GC) pause stutter (Applied automatically by Legends Launcher).
+2. **Performance Mod Packs** — GPU acceleration via Sodium/Lithium (Available as one-click profiles).
+3. **Correct RAM Allocation** — Prevents memory pressure issues and heap resizing.
 
 ---
 
@@ -15,10 +15,11 @@ The biggest wins (in order):
 
 ### Aikar's Flags (Java 21 Recommended)
 
-Use these JVM arguments in your launcher configuration:
+The Legends Launcher automatically injects the highly-optimized Aikar's JVM arguments under the hood to completely eliminate micro-stutters caused by Java's Garbage Collection. 
 
+For reference, the flags applied are:
 ```
--XX:+UseG1GC -XX:MaxGCPauseMillis=130 -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:+PerfDisableSharedMem -XX:G1HeapWastePercent=5 -XX:G1NewCollectionHeuristicPercent=40 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1MixedGCCountTarget=8 -XX:G1SoftMaxPercent=80 -XX:G1HeapRegionSize=16M
+-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1
 ```
 
 ### Memory Allocation
@@ -27,12 +28,12 @@ Use these JVM arguments in your launcher configuration:
 - **For 8GB RAM systems:** Allocate 4-6GB (e.g., `-Xmx6G -Xms6G`)
 - **For 4GB RAM systems:** Allocate 2-3GB (e.g., `-Xmx3G -Xms3G`)
 
-**Important:** Always set `-Xms` equal to `-Xmx` to prevent heap resizing during gameplay (causes stutter).
+**Important:** The Legends Launcher automatically sets your minimum RAM (`-Xms`) equal to your maximum RAM (`-Xmx`) to prevent heap resizing during gameplay.
 
 ### Java Version
 
-- **Use Java 21** — has better garbage collection than Java 8 or 17
-- Verify with: `java -version`
+- **Use Java 21** — It features significantly better garbage collection efficiency than Java 8 or 17.
+- Verify your installation with: `java -version`
 
 ---
 
@@ -44,15 +45,15 @@ Use these JVM arguments in your launcher configuration:
 |---------|-------------|--------|
 | **Render Distance** | 8-12 chunks | Higher = more chunk loading = stutter; balance visibility vs performance |
 | **Simulation Distance** | Lower than render distance | Reduces server-side entity/chunk updates |
-| **Graphics Quality** | Fast | (unless using Sodium, then can be Fancy) |
+| **Graphics Quality** | Fast | (Unless using Sodium, then Fancy is perfectly fine) |
 | **Smooth Lighting** | Off or Minimum | Reduces frame time variance |
 
 ### Frame Rate & Sync
 
 | Setting | Recommended | Reason |
 |---------|-------------|--------|
-| **VSync** | **OFF** | VSync causes input lag; use frame cap instead |
-| **Max Framerate** | Cap at monitor refresh rate | 144 FPS for 144Hz monitor; uncapped = wasted work + more stutter |
+| **VSync** | **OFF** | VSync causes input lag; use a frame cap instead. Legends Launcher turns this off by default. |
+| **Max Framerate** | Cap at monitor refresh rate | Uncapped FPS wastes GPU resources and creates thermal throttling. |
 
 ---
 
@@ -60,14 +61,14 @@ Use these JVM arguments in your launcher configuration:
 
 ### Is it chunk loading stutter?
 
-- Stutter occurs when **moving/exploring** new areas
-- Frame drops when rendering new chunks
+- Stutter occurs specifically when **moving or exploring** new areas.
+- Frame drops happen when rendering new chunks on the horizon.
 
 ### Solutions (in order of effectiveness)
 
-1. **Reduce render distance** (immediate but less immersive)
-2. **Use Nvidium mod** (Nvidia GPUs only) — enables GPU-driven chunk rendering
-3. **Pre-generate your world** with Chunky mod — eliminates on-the-fly chunk gen
+1. **Use Nvidium mod** (Nvidia GPUs only) — Enables GPU-driven, instantaneous chunk rendering.
+2. **Pre-generate your world** with the Chunky mod — Eliminates on-the-fly chunk generation overhead.
+3. **Reduce render distance** (Immediate fix but less immersive).
 
 ---
 
@@ -75,108 +76,83 @@ Use these JVM arguments in your launcher configuration:
 
 ### Task Manager
 
-- Right-click `javaw.exe` → Set priority to **High** (not Realtime)
-- Helps Java process win CPU contention
+- Right-click the Java process (`javaw.exe`) → Set priority to **High** (Not Realtime).
+- Helps the Java process win CPU thread contention.
 
 ### Disable Xbox Game Bar
 
-- Uncheck: Settings → Gaming → Xbox Game Bar → "Open Xbox Game Bar on this device"
-- Xbox Game Bar hooks into Java processes and can cause stutters
+- Uncheck: `Settings → Gaming → Xbox Game Bar → "Open Xbox Game Bar on this device"`
+- The Xbox Game Bar hooks into Java rendering processes and is known to cause micro-stutters.
 
 ### Power Plan
 
-- Set to **High Performance** or **Ultimate Performance** (if available)
-- Prevents CPU frequency scaling during gameplay
+- Set your Windows power plan to **High Performance** or **Ultimate Performance** (if available).
+- Prevents CPU frequency downscaling during gameplay.
 
 ---
 
 ## 5. Mod Recommendations
 
+The Legends Launcher includes one-click profiles to install these automatically.
+
 ### Essential Performance Mods (Fabric)
 
-| Mod | Purpose | Installation |
-|-----|---------|--------------|
-| **Sodium** | GPU-accelerated rendering | Install via launcher's mod profiles |
-| **Lithium** | Entity/block processing optimization | Included in competitive profile |
-| **FerriteCore** | Reduced memory footprint | Included in competitive profile |
-| **EntityCulling** | Skips rendering hidden entities | Included in competitive profile |
+| Mod | Purpose | Included in Launcher |
+|-----|---------|----------------------|
+| **Sodium** | GPU-accelerated rendering | Yes (All Profiles) |
+| **Lithium** | Entity/block processing optimization | Yes (All Profiles) |
+| **FerriteCore** | Reduced memory footprint | Yes (All Profiles) |
+| **EntityCulling** | Skips rendering hidden entities | Yes (All Profiles) |
+| **ImmediatelyFast** | Speeds up immediate mode UI rendering | Yes (All Profiles) |
 
-### Optional Mods
+### Optional Enhancements
 
-- **Chunky** — Pre-generate chunks to eliminate on-the-fly gen stutter
-- **Nvidium** — GPU-driven chunk rendering (Nvidia GPUs only)
-- **Reese's Sodium Options** — Better Sodium settings UI
+- **Chunky** — Pre-generate chunks to eliminate on-the-fly generation stutter.
+- **Nvidium** — GPU-driven chunk rendering (Nvidia GPUs only).
+- **Reese's Sodium Options** — Better UI for Sodium settings (Included in Speedrunner Pack).
 
 ---
 
 ## 6. Troubleshooting Specific Stutter Types
 
 ### "Consistent 200 FPS with periodic freezes"
-
-**Diagnosis:** GC pauses (garbage collection freezing game thread)
-
-**Fix:**
-- Implement Aikar's flags (fixes ~80% of cases)
-- Ensure `-Xms` = `-Xmx` (pre-allocate RAM)
-- Use Java 21
+**Diagnosis:** GC pauses (Garbage collection freezing the game thread).
+**Fix:** The Legends Launcher automatically applies Aikar's flags and matches min/max RAM allocation to fix this. Ensure you are using Java 21.
 
 ### "Stutter only when exploring/moving"
-
-**Diagnosis:** Chunk loading/generation stutter
-
-**Fix:**
-1. Reduce render distance to 8 chunks
-2. Pre-generate world with Chunky
-3. Install Sodium for better chunk pipeline
+**Diagnosis:** Chunk loading/generation stutter.
+**Fix:** Reduce render distance to 8 chunks, pre-generate the world with Chunky, and ensure Sodium is installed.
 
 ### "Periodic stuttering at fixed intervals"
-
-**Diagnosis:** GC pause or Windows background process
-
-**Fix:**
-- Check Task Manager for background processes (disable Xbox Game Bar, Windows Update Medic Service, etc.)
-- Verify Java 21 with Aikar's flags
-- Set process priority to High
+**Diagnosis:** GC pause or Windows background process interference.
+**Fix:** Check Task Manager for background processes (disable Xbox Game Bar, Windows Update). Ensure the Legends Launcher is using High process priority.
 
 ### "Stutter goes away when capping FPS lower"
-
-**Diagnosis:** GPU or CPU bottleneck
-
-**Fix:**
-- If GPU bottleneck: Lower render distance, disable fancy graphics
-- If CPU bottleneck: Ensure Java 21 + Aikar's flags, reduce simulation distance
+**Diagnosis:** GPU or CPU bottleneck.
+**Fix:** Cap FPS to your monitor's refresh rate. If GPU bottlenecked, lower render distance. If CPU bottlenecked, reduce simulation distance.
 
 ---
 
 ## 7. Quick Start Checklist
 
-- [ ] Set Java to version 21
-- [ ] Configure JVM with Aikar's GC flags
-- [ ] Allocate correct RAM (`-Xmx` and `-Xms` equal)
-- [ ] Set render distance to 8-12
-- [ ] Turn OFF VSync
-- [ ] Set frame cap to monitor refresh rate (e.g., 144)
-- [ ] Install Sodium mod (if using Fabric)
-- [ ] Set Minecraft process priority to High in Task Manager
-- [ ] Disable Xbox Game Bar
-- [ ] Set Windows power plan to High Performance
-- [ ] Test and gradually increase render distance if FPS is stable
+- [ ] Install Java 21.
+- [ ] Select a Mod Profile (Competitive or Speedrunner) in the Legends Launcher.
+- [ ] Set Render Distance to 8-12.
+- [ ] Set Frame Cap to monitor refresh rate (e.g., 144).
+- [ ] Set Windows Power Plan to High Performance.
 
 ---
 
 ## FAQ
 
 **Q: Why is my 200 FPS game still stuttering?**
-A: Uncapped FPS causes wasted GPU work and increases pressure on the GC. Cap at your monitor refresh rate (e.g., 144 FPS) — the Aikar's flags directly fix the underlying GC pause issue.
+A: Uncapped FPS causes wasted GPU work and increases pressure on the GC. Cap it at your monitor's refresh rate.
 
 **Q: Should I use Java 8, 17, or 21?**
-A: Use **Java 21** — it has significantly better garbage collection than Java 8 or 17 for modern Minecraft versions.
+A: Use **Java 21**. It has significantly better garbage collection and threading optimizations for modern Minecraft.
 
 **Q: Is Sodium required?**
-A: Not required, but it's a massive performance gain (30-50% FPS improvement for most systems). Highly recommended.
-
-**Q: Can I use these settings on servers I don't own?**
-A: Yes! Client-side settings (render distance, graphics, VSync, frame cap) are purely local. Server-side settings (simulation distance) depend on the server configuration.
+A: It is highly recommended. It provides a massive 30-50% FPS improvement for most systems.
 
 ---
 

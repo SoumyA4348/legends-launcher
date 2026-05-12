@@ -1,3 +1,4 @@
+require("dotenv").config();
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const { exec } = require("child_process");
@@ -5,6 +6,7 @@ const RPC = require("discord-rpc");
 const msmc = require("msmc");
 const { launchMinecraft } = require("./src/launcher");
 
+// --- Global State & Configuration ---
 let mainWindow = null;
 let activeLauncher = null;
 let rpcClient = null;
@@ -12,7 +14,7 @@ let discordReady = false;
 let lastPresenceSignature = "";
 let inGameFallbackTimer = null;
 const launcherSessionStart = Date.now();
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "";
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "1412366181511335948";
 const ENABLE_DISCORD_RPC = true;
 const DISCORD_BUTTON_1_LABEL = process.env.DISCORD_BUTTON_1_LABEL || "Join Discord";
 const DISCORD_BUTTON_1_URL = process.env.DISCORD_BUTTON_1_URL || "";
@@ -20,6 +22,7 @@ const DISCORD_BUTTON_2_LABEL = process.env.DISCORD_BUTTON_2_LABEL || "Download L
 const DISCORD_BUTTON_2_URL = process.env.DISCORD_BUTTON_2_URL || "";
 const DISCORD_SHOW_SERVER = process.env.DISCORD_SHOW_SERVER !== "false";
 
+// --- Helper Functions ---
 function isValidUrl(value) {
   if (!value) {
     return false; 
@@ -145,6 +148,7 @@ function sendStatus(message) {
   mainWindow.webContents.send("launcher:status", message);
 }
 
+// --- Discord RPC Engine ---
 async function setDiscordPresence(overrides = {}) {
   if (!ENABLE_DISCORD_RPC || !rpcClient || !discordReady) {
     return;
@@ -292,6 +296,7 @@ function initializeDiscordRpc() {
   });
 }
 
+// --- Window & App Lifecycle ---
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 980,
@@ -316,16 +321,28 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "src", "renderer", "index.html"));
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  initializeDiscordRpc();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
-});
+
+  app.whenReady().then(() => {
+    createWindow();
+    initializeDiscordRpc();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -349,6 +366,7 @@ app.on("before-quit", async () => {
   }
 });
 
+// --- IPC Handlers (Auth & Launch) ---
 ipcMain.handle("launcher:auth", async () => {
   try {
     const authManager = new msmc.Auth("select_account");
