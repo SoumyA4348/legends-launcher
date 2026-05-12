@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Legends Launcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #050811;
+      --glass-bg: rgba(10, 15, 25, 0.4);
+      --glass-border: rgba(255, 255, 255, 0.08);
+      --accent: #00d2ff;
+      --accent-alt: #3a7bd5;
+      --text-main: #f8fafc;
+      --text-mut: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Custom Titlebar */
+    .titlebar {
+      height: 40px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      padding-left: 20px;
+      -webkit-app-region: drag;
+      z-index: 100;
+      flex-shrink: 0;
+    }
+
+    .titlebar-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-mut);
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .titlebar-title svg {
+      width: 16px;
+      height: 16px;
+      opacity: 0.8;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Video Background Placeholder / Animated Mesh */
+    .background-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: -2;
+      overflow: hidden;
+      background-image:
+        radial-gradient(ellipse at 20% 0%, rgba(58, 123, 213, 0.3) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 100%, rgba(0, 210, 255, 0.25) 0%, transparent 60%);
+    }
+
+    /* Optional Video Loop Placeholder */
+    .bg-video {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      min-width: 100%;
+      min-height: 100%;
+      transform: translate(-50%, -50%);
+      opacity: 0.15;
+      /* subtle */
+      pointer-events: none;
+      filter: blur(2px);
+    }
+
+    /* Animated Orbs */
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(100px);
+      z-index: -1;
+      animation: float-anim 25s infinite ease-in-out alternate;
+    }
+
+    .orb-1 {
+      width: 500px;
+      height: 500px;
+      background: rgba(0, 210, 255, 0.15);
+      top: -100px;
+      left: -100px;
+    }
+
+    .orb-2 {
+      width: 400px;
+      height: 400px;
+      background: rgba(100, 50, 255, 0.1);
+      bottom: -50px;
+      right: 10%;
+      animation-delay: -5s;
+    }
+
+    @keyframes float-anim {
+      0% {
+        transform: translate(0, 0);
+      }
+
+      100% {
+        transform: translate(-30px, 40px);
+      }
+    }
+
+    /* Layout */
+    .app {
+      display: flex;
+      width: 100%;
+      flex: 1;
+      height: calc(100% - 40px);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 90px;
+      background: rgba(5, 8, 17, 0.85);
+      backdrop-filter: blur(20px);
+      border-right: 1px solid var(--glass-border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px 0;
+      z-index: 10;
+    }
+
+    .profile-avatar {
+      width: 54px;
+      height: 54px;
+      border-radius: 16px;
+      margin-bottom: 40px;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      transition: all 0.3s ease;
+    }
+
+    .profile-avatar:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .profile-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .nav-item {
+      width: 50px;
+      height: 50px;
+      border-radius: 14px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      color: var(--text-mut);
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .nav-item:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+      background: rgba(0, 210, 255, 0.1);
+    }
+
+    .nav-item svg {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Tooltips */
+    .nav-item::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: 65px;
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateX(-10px);
+      transition: 0.2s;
+      white-space: nowrap;
+    }
+
+    .nav-item:hover::after {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* Main Area */
+    .main-area {
+      flex: 1;
+      position: relative;
+    }
+
+    .view {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: 40px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .view.active {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    /* Common Card */
+    .card {
+      background: var(--glass-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Home View Elements */
+    .home-view {
+      justify-content: space-between;
+    }
+
+    .home-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .home-title {
+      font-size: 48px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff, #aabce0);
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -1px;
+    }
+
+    .home-subtitle {
+      color: var(--text-mut);
+      font-size: 16px;
+      margin-top: 5px;
+    }
+
+    .news-widget {
+      width: 400px;
+      height: 200px;
+      background: linear-gradient(rgba(10, 15, 25, 0.1), rgba(10, 15, 25, 0.7)), url('https://images.unsplash.com/photo-1627856013091-fed6e4e043c5?auto=format&fit=crop&q=80') center/cover;
+      border-radius: 20px;
+      border: 1px solid var(--glass-border);
+      display: flex;
+      align-items: flex-end;
+      padding: 20px;
+      transition: transform 0.3s;
+    }
+
+    .news-widget:hover {
+      transform: translateY(-5px);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .news-span {
+      font-weight: 700;
+      color: #fff;
+      font-size: 20px;
+    }
+
+    .news-badge {
+      background: var(--accent);
+      color: #000;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      display: inline-block;
+    }
+
+    .launch-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 40px;
+    }
+
+    .giant-launch-btn {
+      width: 340px;
+      height: 70px;
+      border: none;
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--accent-alt), var(--accent));
+      color: #fff;
+      font-size: 24px;
+      font-family: 'Outfit';
+      font-weight: 800;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      box-shadow: 0 10px 30px rgba(0, 210, 255, 0.4);
+      transition: all 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .giant-launch-btn::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+      transition: 0.6s;
+    }
+
+    .giant-launch-btn:hover {
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 15px 40px rgba(0, 210, 255, 0.6);
+    }
+
+    .giant-launch-btn:hover::before {
+      left: 100%;
+    }
+
+    .giant-launch-btn:active {
+      transform: translateY(0);
+    }
+
+    .giant-launch-btn:disabled {
+      background: #334155;
+      box-shadow: none;
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+
+    .status-text {
+      margin-top: 15px;
+      font-size: 14px;
+      font-weight: 500;
+      height: 20px;
+      transition: color 0.3s;
+    }
+
+    .status-text.ok {
+      color: var(--accent);
+    }
+
+    .status-text.error {
+      color: #ff4b4b;
+    }
+
+    /* Settings View */
+    .settings-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      margin-top: 20px;
+    }
+
+    .field-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-mut);
+      margin-bottom: 8px;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      color: #fff;
+      padding: 14px 16px;
+      font-family: inherit;
+      font-size: 15px;
+      transition: 0.2s;
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      outline: none;
+      box-shadow: 0 0 10px rgba(0, 210, 255, 0.2);
+    }
+
+    /* Custom Checkbox */
+    .check-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 16px;
+      cursor: pointer;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 12px;
+      border: 1px solid transparent;
+      transition: 0.2s;
+    }
+
+    .check-row:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--glass-border);
+    }
+
+    .check-row input {
+      display: none;
+    }
+
+    .checkmark {
+      width: 22px;
+      height: 22px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 2px solid var(--text-mut);
+      border-radius: 6px;
+      margin-right: 14px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: 0.2s;
+    }
+
+    .check-row input:checked+.checkmark {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .check-row input:checked+.checkmark::after {
+      content: '✔';
+      color: #000;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .check-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .check-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .check-desc {
+      font-size: 12px;
+      color: var(--text-mut);
+      margin-top: 4px;
+    }
+
+    /* Console View */
+    .console-header {
+      margin-bottom: 20px;
+    }
+
+    .logs-box {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--glass-border);
+      border-radius: 14px;
+      padding: 20px;
+      font-family: 'Fira Code', monospace;
+      font-size: 13px;
+      color: #cbd5e1;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .logs-box::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .logs-box::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+    }
+
+    h2.section-title {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Background Layer -->
+  <div class="background-container">
+    <!-- Place a real MP4 URL here in future if desired -->
+    <!-- <video autoplay loop muted class="bg-video">
+           <source src="https://example.com/mc-background.mp4" type="video/mp4">
+         </video> -->
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+  </div>
+
+  <div class="titlebar">
+    <div class="titlebar-title">
+      <svg viewBox="0 0 24 24">
+        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+        <polyline points="2 17 12 22 22 17"></polyline>
+        <polyline points="2 12 12 17 22 12"></polyline>
+      </svg>
+      Legends Launcher
+    </div>
+  </div>
+
+  <div class="app">
+    <!-- SIDEBAR -->
+    <nav class="sidebar">
+      <div class="profile-avatar">
+        <img id="profileAvatar" src="https://minotar.net/helm/Soumya_legend1/200.png" alt="Profile">
+      </div>
+
+      <div class="nav-items" id="nav-container">
+        <div class="nav-item active" data-tab="home" data-tooltip="Home">
+          <svg viewBox="0 0 24 24">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+        </div>
+        <div class="nav-item" data-tab="settings" data-tooltip="Settings">
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+            </path>
+          </svg>
+        </div>
+        <div class="nav-item" data-tab="console" data-tooltip="Console">
+          <svg viewBox="0 0 24 24">
+            <polyline points="4 17 10 11 4 5"></polyline>
+            <line x1="12" y1="19" x2="20" y2="19"></line>
+          </svg>
+        </div>
+      </div>
+    </nav>
+
+    <!-- MAIN VIEWS -->
+    <main class="main-area">
+
+      <!-- HOME TAB -->
+      <div id="view-home" class="view home-view active">
+        <div class="home-header">
+          <div>
+            <h1 class="home-title">Legends Client</h1>
+          </div>
+          <div class="news-widget">
+          </div>
+        </div>
+
+        <div class="launch-section">
+          <button id="launchBtn" class="giant-launch-btn">PLAY</button>
+          <div id="status" class="status-text">Ready to launch</div>
+        </div>
+      </div>
+
+      <!-- SETTINGS TAB -->
+      <div id="view-settings" class="view">
+        <div class="card" style="height: 100%;">
+          <h2 class="section-title">Client Settings</h2>
+          <p style="color: var(--text-mut); margin-bottom: 20px;">Configure your Minecraft launch profile.</p>
+
+          <div class="settings-grid">
+            <div>
+              <div class="field-group">
+                <label>Display Name</label>
+                <div style="display: flex; gap: 10px;">
+                  <input id="username" type="text" value="Soumya_legend1" />
+                  <button id="msLoginBtn" style="flex-shrink: 0; background: #2f2f2f; border: 1px solid var(--glass-border); border-radius: 12px; color: #fff; padding: 0 15px; cursor: pointer; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+                    <svg style="width: 14px; height: 14px;" viewBox="0 0 23 23"><path fill="#f3f3f3" d="M0 0h11v11H0zM12 0h11v11H12zM0 12h11v11H0zM12 12h11v11H12z"/></svg>
+                    Microsoft Login
+                  </button>
+                </div>
+              </div>
+              <div class="field-group">
+                <label>Minecraft Version</label>
+                <input id="version" type="text" value="1.20.1" />
+              </div>
+              <div class="field-group">
+                <label>Performance Profile</label>
+                <select id="launchProfile">
+                  <option value="competitive" selected>Competitive (Low Lag)</option>
+                  <option value="full">Full (All Utilities)</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label>Server Host</label>
+                <input id="serverHost" type="text" value="na.gamster.org" />
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                <div class="field-group">
+                  <label>Port</label>
+                  <input id="serverPort" type="number" value="25565" />
+                </div>
+                <div class="field-group">
+                  <label>RAM (MB)</label>
+                  <input id="maxMemoryMb" type="number" value="4096" />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div
+                style="background: rgba(0,0,0,0.2); padding: 20px; border-radius: 16px; border: 1px solid var(--glass-border);">
+                <h3 style="margin-bottom: 15px; font-size: 16px;">Modifications</h3>
+
+                <label class="check-row">
+                  <input id="installParkourPack" type="checkbox" checked />
+                  <div class="checkmark"></div>
+                  <div class="check-info">
+                    <span class="check-title">Performance & Utils Pack</span>
+                    <span class="check-desc">Sodium, Lithium, ModMenu, Zoomify, etc.</span>
+                  </div>
+                </label>
+
+                <label class="check-row">
+                  <input id="installFpsHud" type="checkbox" checked />
+                  <div class="checkmark"></div>
+                  <div class="check-info">
+                    <span class="check-title">FPS HUD Overlay</span>
+                    <span class="check-desc">Display frame-rate in the top left corner.</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONSOLE TAB -->
+      <div id="view-console" class="view" style="padding-bottom: 40px;">
+        <div class="card" style="height: 100%; display: flex; flex-direction: column;">
+          <div class="console-header">
+            <h2 class="section-title">System Console</h2>
+            <p style="color: var(--text-mut);">Internal logs, downloads, and launch output.</p>
+          </div>
+          <div id="logs" class="logs-box"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="./renderer.js"></script>
+</body>
+
+</html>

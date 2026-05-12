@@ -1,0 +1,16 @@
+{
+  "name": "legends-launcher",
+  "version": "0.1.0",
+  "description": "Legends Launcher",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "electron": "^41.1.1",
+    "minecraft-launcher-core": "latest",
+    "msmc": "^5.0.5"
+  }
+}
