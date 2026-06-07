@@ -2,29 +2,17 @@
   "name": "legends-launcher",
   "version": "0.1.0",
   "description": "Legends Launcher",
+  "main": "main.js",
   "author": "Soumya Patel",
   "license": "MIT",
-  "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron .",
-    "build": "electron-builder --win"
-  },
-  "build": {
-    "appId": "com.legends.launcher",
-    "productName": "Legends Launcher",
-    "win": {
-      "target": "nsis"
-    }
+    "dev": "electron ."
   },
   "dependencies": {
     "discord-rpc": "^4.0.1",
-    "dotenv": "^17.4.2",
+    "electron": "^41.1.1",
     "minecraft-launcher-core": "latest",
     "msmc": "^5.0.5"
-  },
-  "devDependencies": {
-    "electron": "^42.0.1",
-    "electron-builder": "^26.8.1"
   }
 }

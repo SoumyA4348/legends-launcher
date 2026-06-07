@@ -148,6 +148,7 @@ function forcePerformanceVideoSettings(minecraftRoot, hooks) {
   const requiredSettings = {
     enableVsync: "false",
     maxFps: "240",
+    framerateLimit: "240",
     prioritizeChunkUpdates: "2",
     renderDistance: "10",
     simulationDistance: "8",
@@ -207,8 +208,17 @@ async function ensureFabricProfile(version, minecraftRoot, hooks) {
   const profilePath = path.join(versionsDir, `${profileId}.json`);
 
   if (fs.existsSync(profilePath)) {
-    hooks.onStatus(`Fabric profile ready: ${profileId}`);
-    return profileId;
+    try {
+      const cached = JSON.parse(fs.readFileSync(profilePath, "utf8"));
+      if (cached && (cached.id || Array.isArray(cached.libraries))) {
+        hooks.onStatus(`Fabric profile ready: ${profileId}`);
+        return profileId;
+      }
+    } catch (_error) {
+      // Fall through to re-fetch
+    }
+    hooks.onStatus("Fabric profile corrupted, re-fetching...");
+    fs.rmSync(profilePath, { force: true });
   }
 
   hooks.onStatus(`Installing Fabric loader ${loaderVersion}...`);
@@ -288,24 +298,32 @@ async function ensureMods(version, minecraftRoot, hooks, modsList) {
 function readManagedModsState(minecraftRoot) {
   const statePath = path.join(minecraftRoot, MANAGED_MODS_STATE_FILE);
   if (!fs.existsSync(statePath)) {
-    return [];
+    return { mcVersion: null, fabricVersion: null, files: [] };
   }
 
   try {
     const parsed = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
+    // Backwards compatibility: old format was a plain array
+    if (Array.isArray(parsed)) {
+      return { mcVersion: null, fabricVersion: null, files: parsed };
+    }
+    return {
+      mcVersion: parsed.mcVersion || null,
+      fabricVersion: parsed.fabricVersion || null,
+      files: Array.isArray(parsed.files) ? parsed.files : []
+    };
   } catch (_error) {
-    return [];
+    return { mcVersion: null, fabricVersion: null, files: [] };
   }
 }
 
-function writeManagedModsState(minecraftRoot, files) {
+function writeManagedModsState(minecraftRoot, state) {
   const statePath = path.join(minecraftRoot, MANAGED_MODS_STATE_FILE);
-  fs.writeFileSync(statePath, JSON.stringify(files, null, 2), "utf8");
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
 }
 
 function pruneManagedMods(minecraftRoot, selectedFiles, hooks) {
-  const previousFiles = readManagedModsState(minecraftRoot);
+  const { files: previousFiles } = readManagedModsState(minecraftRoot);
   const selectedSet = new Set(selectedFiles);
   const modsDir = path.join(minecraftRoot, "mods");
   let removedCount = 0;
@@ -384,6 +402,27 @@ async function launchMinecraft(config, hooks) {
       launchProfile === "full" ? "Preparing full mod profile..." : "Preparing competitive profile..."
     );
     const fabricProfile = await ensureFabricProfile(version, minecraftRoot, hooks);
+    // Extract loader version from profileId: "fabric-loader-<loaderVer>-<mcVer>"
+    const fabricLoaderVersion = fabricProfile.slice(
+      "fabric-loader-".length,
+      fabricProfile.length - version.length - 1
+    );
+
+    // If MC version or Fabric loader version changed since last run, purge stale mods
+    // so they are re-downloaded for the correct version pair.
+    const prevState = readManagedModsState(minecraftRoot);
+    if (prevState.mcVersion !== version || prevState.fabricVersion !== fabricLoaderVersion) {
+      if (prevState.files.length > 0) {
+        hooks.onStatus(
+          `Minecraft or Fabric version changed — removing ${prevState.files.length} stale mod(s)...`
+        );
+        const modsDir = path.join(minecraftRoot, "mods");
+        for (const fileName of prevState.files) {
+          fs.rmSync(path.join(modsDir, fileName), { force: true });
+        }
+      }
+    }
+
     const uniqueMods = [];
     const seenProjects = new Set();
     for (const mod of mergedMods) {
@@ -397,14 +436,18 @@ async function launchMinecraft(config, hooks) {
 
     const selectedFiles = await ensureMods(version, minecraftRoot, hooks, uniqueMods);
     pruneManagedMods(minecraftRoot, selectedFiles, hooks);
-    writeManagedModsState(minecraftRoot, selectedFiles);
+    writeManagedModsState(minecraftRoot, {
+      mcVersion: version,
+      fabricVersion: fabricLoaderVersion,
+      files: selectedFiles
+    });
     if (installFpsHud) {
       hooks.onStatus("FPS overlay installed.");
     }
     launchVersion.custom = fabricProfile;
   } else {
     pruneManagedMods(minecraftRoot, [], hooks);
-    writeManagedModsState(minecraftRoot, []);
+    writeManagedModsState(minecraftRoot, { mcVersion: version, fabricVersion: null, files: [] });
   }
 
   forcePerformanceVideoSettings(minecraftRoot, hooks);
@@ -427,27 +470,21 @@ async function launchMinecraft(config, hooks) {
     version: launchVersion,
     memory: {
       max: `${maxMemoryMb}M`,
-      min: `${maxMemoryMb}M`
+      min: `${Math.min(512, maxMemoryMb)}M`
     },
     customArgs: [
-      "-XX:+UseG1GC",
-      "-XX:+ParallelRefProcEnabled",
-      "-XX:MaxGCPauseMillis=200",
       "-XX:+UnlockExperimentalVMOptions",
-      "-XX:+DisableExplicitGC",
-      "-XX:+AlwaysPreTouch",
-      "-XX:G1NewSizePercent=30",
-      "-XX:G1MaxNewSizePercent=40",
-      "-XX:G1HeapRegionSize=8M",
+      "-XX:+UseG1GC",
+      "-XX:MaxGCPauseMillis=45",
+      "-XX:G1NewSizePercent=20",
       "-XX:G1ReservePercent=20",
-      "-XX:G1HeapWastePercent=5",
-      "-XX:G1MixedGCCountTarget=4",
       "-XX:InitiatingHeapOccupancyPercent=15",
-      "-XX:G1MixedGCLiveThresholdPercent=90",
-      "-XX:G1RSetUpdatingPauseTimePercent=5",
+      "-XX:G1MixedGCCountTarget=4",
       "-XX:SurvivorRatio=32",
+      "-XX:MaxTenuringThreshold=1",
       "-XX:+PerfDisableSharedMem",
-      "-XX:MaxTenuringThreshold=1"
+      "-XX:-UseAdaptiveSizePolicy",
+      "-XX:-OmitStackTraceInFastThrow"
     ],
     quickPlay: {
       type: "multiplayer",
