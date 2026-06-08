@@ -19,11 +19,11 @@
   },
   "dependencies": {
     "discord-rpc": "^4.0.1",
-    "electron": "^41.1.1",
     "minecraft-launcher-core": "latest",
     "msmc": "^5.0.5"
   },
   "devDependencies": {
+    "electron": "^41.1.1",
     "electron-builder": "^24.13.3"
   }
 }
