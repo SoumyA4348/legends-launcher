@@ -7,12 +7,23 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "build": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.legends.launcher",
+    "productName": "Legends Launcher",
+    "win": {
+      "target": "nsis"
+    }
   },
   "dependencies": {
     "discord-rpc": "^4.0.1",
     "electron": "^41.1.1",
     "minecraft-launcher-core": "latest",
     "msmc": "^5.0.5"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.13.3"
   }
 }
