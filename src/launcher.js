@@ -6,7 +6,7 @@ const { app } = require("electron");
 const { Client } = require("minecraft-launcher-core");
 
 const PARKOUR_SPEEDRUNNER_MODS = [
-  { projects: ["fabric-api"], name: "Fabric API" },
+  { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
   { projects: ["sodium"], name: "Sodium" },
   { projects: ["lithium"], name: "Lithium" },
   { projects: ["ferrite-core"], name: "FerriteCore" },
@@ -21,7 +21,7 @@ const PARKOUR_SPEEDRUNNER_MODS = [
 ];
 
 const COMPETITIVE_MODS = [
-  { projects: ["fabric-api"], name: "Fabric API" },
+  { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
   { projects: ["sodium"], name: "Sodium" },
   { projects: ["lithium"], name: "Lithium" },
   { projects: ["ferrite-core"], name: "FerriteCore" },
@@ -30,11 +30,20 @@ const COMPETITIVE_MODS = [
 ];
 
 const FPS_HUD_MODS = [
-  { projects: ["fabric-api"], name: "Fabric API" },
+  { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
   { projects: ["fps-monitor"], name: "FPS Monitor" }
 ];
 
 const MANAGED_MODS_STATE_FILE = ".launcher-managed-mods.json";
+
+function isLegacyVersion(version) {
+  const match = version.match(/^1\.(\d+)/);
+  if (match) {
+    const minor = parseInt(match[1], 10);
+    return minor <= 13;
+  }
+  return false;
+}
 
 function sanitizePort(value) {
   const parsed = Number.parseInt(String(value), 10);
@@ -193,7 +202,11 @@ function forcePerformanceVideoSettings(minecraftRoot, hooks) {
 }
 
 async function ensureFabricProfile(version, minecraftRoot, hooks) {
-  const loaderList = await fetchJson(`https://meta.fabricmc.net/v2/versions/loader/${version}`);
+  const baseUrl = isLegacyVersion(version)
+    ? "https://meta.legacyfabric.net"
+    : "https://meta.fabricmc.net";
+
+  const loaderList = await fetchJson(`${baseUrl}/v2/versions/loader/${version}`);
   if (!Array.isArray(loaderList) || loaderList.length === 0) {
     throw new Error(`No Fabric loader found for Minecraft ${version}.`);
   }
@@ -223,7 +236,7 @@ async function ensureFabricProfile(version, minecraftRoot, hooks) {
 
   hooks.onStatus(`Installing Fabric loader ${loaderVersion}...`);
   const profileJson = await fetchJson(
-    `https://meta.fabricmc.net/v2/versions/loader/${version}/${loaderVersion}/profile/json`
+    `${baseUrl}/v2/versions/loader/${version}/${loaderVersion}/profile/json`
   );
   fs.mkdirSync(versionsDir, { recursive: true });
   fs.writeFileSync(profilePath, JSON.stringify(profileJson, null, 2), "utf8");
@@ -240,13 +253,15 @@ async function ensureMods(version, minecraftRoot, hooks, modsList) {
   fs.mkdirSync(modsDir, { recursive: true });
   const selectedFileNames = [];
 
+  const loaders = isLegacyVersion(version) ? ["fabric", "legacy-fabric"] : ["fabric"];
+
   for (const mod of modsList) {
     hooks.onStatus(`Resolving mod: ${mod.name}...`);
     let modVersions = null;
     for (const projectId of mod.projects) {
       try {
         const versionsUrl = `https://api.modrinth.com/v2/project/${projectId}/version?loaders=${encodeURIComponent(
-          JSON.stringify(["fabric"])
+          JSON.stringify(loaders)
         )}&game_versions=${encodeURIComponent(JSON.stringify([version]))}`;
         const candidateVersions = await fetchJson(versionsUrl);
         if (Array.isArray(candidateVersions) && candidateVersions.length > 0) {
@@ -322,6 +337,112 @@ function writeManagedModsState(minecraftRoot, state) {
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
 }
 
+function walkDir(dir, ext, results = []) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (_error) {
+    return results;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkDir(full, ext, results);
+    } else if (entry.isFile() && entry.name.endsWith(ext)) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+function validateAndRepairLibraries(minecraftRoot, hooks) {
+  const librariesDir = path.join(minecraftRoot, "libraries");
+  if (!fs.existsSync(librariesDir)) {
+    return;
+  }
+
+  const jars = walkDir(librariesDir, ".jar");
+  let deletedCount = 0;
+
+  // ZIP local file header magic: 50 4B 03 04
+  // ZIP end-of-central-directory (EOCD) signature: 50 4B 05 06
+  // A valid ZIP must start with the local file header magic AND end with the EOCD record.
+  // Checking only the first 4 bytes misses truncated files that start correctly but are
+  // incomplete (causing "zip END header not found" at runtime).
+  const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  const EOCD_SIG = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
+  // Minimum valid ZIP size: local file header(30) + EOCD(22) = 52 bytes
+  const MIN_ZIP_SIZE = 52;
+  // EOCD is at least 22 bytes; we scan the last 65557 bytes (max comment length + EOCD)
+  const EOCD_SCAN_SIZE = 65557 + 22;
+
+  for (const jarPath of jars) {
+    let isCorrupted = false;
+    let fd = -1;
+
+    try {
+      const stat = fs.statSync(jarPath);
+      if (stat.size < MIN_ZIP_SIZE) {
+        isCorrupted = true;
+      } else {
+        fd = fs.openSync(jarPath, "r");
+
+        // Check start magic
+        const headBuf = Buffer.alloc(4);
+        fs.readSync(fd, headBuf, 0, 4, 0);
+        if (!headBuf.equals(ZIP_MAGIC)) {
+          isCorrupted = true;
+        } else {
+          // Check EOCD signature exists somewhere in the last EOCD_SCAN_SIZE bytes
+          const scanSize = Math.min(stat.size, EOCD_SCAN_SIZE);
+          const tailBuf = Buffer.alloc(scanSize);
+          fs.readSync(fd, tailBuf, 0, scanSize, stat.size - scanSize);
+          // Search backwards for EOCD signature
+          let foundEocd = false;
+          for (let i = tailBuf.length - 4; i >= 0; i--) {
+            if (
+              tailBuf[i] === EOCD_SIG[0] &&
+              tailBuf[i + 1] === EOCD_SIG[1] &&
+              tailBuf[i + 2] === EOCD_SIG[2] &&
+              tailBuf[i + 3] === EOCD_SIG[3]
+            ) {
+              foundEocd = true;
+              break;
+            }
+          }
+          if (!foundEocd) {
+            isCorrupted = true;
+          }
+        }
+      }
+    } catch (_error) {
+      isCorrupted = true;
+    } finally {
+      if (fd !== -1) {
+        try {
+          fs.closeSync(fd);
+        } catch (_error) {
+          // ignore close errors
+        }
+      }
+    }
+
+    if (isCorrupted) {
+      try {
+        fs.rmSync(jarPath, { force: true });
+        hooks.onStatus(`Removed corrupted library: ${path.basename(jarPath)}`);
+        deletedCount += 1;
+      } catch (_error) {
+        // ignore deletion errors
+      }
+    }
+  }
+
+  if (deletedCount > 0) {
+    hooks.onStatus("Corrupted libraries removed. They will be re-downloaded on launch.");
+  }
+}
+
 function pruneManagedMods(minecraftRoot, selectedFiles, hooks) {
   const { files: previousFiles } = readManagedModsState(minecraftRoot);
   const selectedSet = new Set(selectedFiles);
@@ -390,6 +511,8 @@ async function launchMinecraft(config, hooks) {
     type: "release"
   };
 
+  const legacy = isLegacyVersion(version);
+
   const profileMods =
     launchProfile === "full" && installParkourPack ? PARKOUR_SPEEDRUNNER_MODS : COMPETITIVE_MODS;
   const mergedMods = [...profileMods];
@@ -397,7 +520,17 @@ async function launchMinecraft(config, hooks) {
     mergedMods.push(...FPS_HUD_MODS);
   }
 
-  if (mergedMods.length > 0) {
+  if (legacy) {
+    // Legacy Minecraft (< 1.14) has no compatible Fabric performance mods, and
+    // LegacyFabric's maven does not host the lwjgl-platform natives jar (returns a
+    // 404 HTML page that gets saved as a broken .jar and crashes the game). For these
+    // versions we launch vanilla so any version the user types reliably starts.
+    hooks.onStatus(
+      `Legacy version ${version} detected — launching vanilla (Fabric mods are not available for this version).`
+    );
+    pruneManagedMods(minecraftRoot, [], hooks);
+    writeManagedModsState(minecraftRoot, { mcVersion: version, fabricVersion: null, files: [] });
+  } else if (mergedMods.length > 0) {
     hooks.onStatus(
       launchProfile === "full" ? "Preparing full mod profile..." : "Preparing competitive profile..."
     );
@@ -464,10 +597,15 @@ async function launchMinecraft(config, hooks) {
     };
   }
 
+  // Check for Java 21 installation
+  const java21Path = "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11.10-hotspot\\bin\\java.exe";
+  const hasJava21 = fs.existsSync(java21Path);
+
   const options = {
     authorization: auth,
     root: minecraftRoot,
     version: launchVersion,
+    ...(hasJava21 ? { javaPath: java21Path } : {}),
     memory: {
       max: `${maxMemoryMb}M`,
       min: `${Math.min(512, maxMemoryMb)}M`
@@ -495,6 +633,7 @@ async function launchMinecraft(config, hooks) {
     }
   };
 
+  validateAndRepairLibraries(minecraftRoot, hooks);
   hooks.onStatus(`Preparing Minecraft ${version} for ${username}...`);
 
   launcher.on("debug", (line) => hooks.onStatus(`DEBUG: ${line}`));
