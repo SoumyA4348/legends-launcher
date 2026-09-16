@@ -1,6 +1,6 @@
-# Private Custom Minecraft Launcher
+# Legends Launcher
 
-A starter private Minecraft launcher built with Electron + `minecraft-launcher-core`.
+A custom, high-performance Minecraft launcher built with Electron and `minecraft-launcher-core`, engineered for competitive play, instant mod pack deployment, and private server integration.
 
 ## Features
 
@@ -16,7 +16,7 @@ A starter private Minecraft launcher built with Electron + `minecraft-launcher-c
 
 ## Important notes
 
-- This starter currently uses **offline mode authentication** (username-only local profile).
+- Legends Launcher currently utilizes **offline mode authentication** (username-only local profile).
 - For public distribution or premium account enforcement, add Microsoft/Xbox Live auth before shipping.
 - Users still need a Java runtime installed for Minecraft.
 
