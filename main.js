@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { exec } = require("child_process");
 const RPC = require("discord-rpc");
 const msmc = require("msmc");
@@ -349,27 +350,248 @@ app.on("before-quit", async () => {
   }
 });
 
-ipcMain.handle("launcher:auth", async () => {
+// --- Microsoft Authentication & Session Management ---
+
+let currentMclcUser = null;
+
+function getAuthProfilePath() {
+  return path.join(app.getPath("userData"), "auth_profile.json");
+}
+
+function loadSavedAuthProfile() {
   try {
+    const filePath = getAuthProfilePath();
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (data && data.access_token && data.name) {
+        return data;
+      }
+    }
+  } catch (err) {
+    console.error("[Auth] Error reading auth profile:", err.message);
+  }
+  return null;
+}
+
+function saveAuthProfile(authObj) {
+  try {
+    const filePath = getAuthProfilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(authObj, null, 2), "utf8");
+  } catch (err) {
+    console.error("[Auth] Error saving auth profile:", err.message);
+  }
+}
+
+function clearAuthProfile() {
+  try {
+    const filePath = getAuthProfilePath();
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (err) {
+    console.error("[Auth] Error clearing auth profile:", err.message);
+  }
+}
+
+async function ensureValidAuth(savedAuth) {
+  if (!savedAuth) {
+    return { ok: false, message: "No authentication session." };
+  }
+
+  const exp = savedAuth.meta?.exp || 0;
+  const isExpiringSoon = Date.now() >= (exp - 5 * 60 * 1000);
+
+  if (!isExpiringSoon && savedAuth.access_token && savedAuth.name) {
+    return { ok: true, profile: savedAuth };
+  }
+
+  const refreshToken = savedAuth.meta?.refresh;
+  if (!refreshToken) {
+    clearAuthProfile();
+    return { ok: false, message: "Session expired. Please sign in again." };
+  }
+
+  try {
+    const authManager = new msmc.Auth();
+    const xbox = await authManager.refresh(refreshToken);
+    const mc = await xbox.getMinecraft();
+    if (mc.isDemo()) {
+      clearAuthProfile();
+      return { ok: false, message: "This Microsoft account does not own Minecraft." };
+    }
+    const refreshedMclc = mc.mclc(true);
+    saveAuthProfile(refreshedMclc);
+    return { ok: true, profile: refreshedMclc };
+  } catch (err) {
+    console.error("[Auth] Token refresh failed:", err.message);
+    clearAuthProfile();
+    return { ok: false, message: "Session expired. Please sign in again." };
+  }
+}
+
+function loginWithMicrosoft(parentWindow) {
+  return new Promise((resolve, reject) => {
     const authManager = new msmc.Auth("select_account");
-    const xboxManager = await authManager.launch("raw");
-    const mcResult = await xboxManager.getMinecraft();
-    
-    if (mcResult.type === "Success") {
-      return { 
-        ok: true, 
+    const redirectUri = "https://login.live.com/oauth20_desktop.srf";
+    const authUrl = authManager.createLink(redirectUri);
+
+    const loginWin = new BrowserWindow({
+      width: 520,
+      height: 680,
+      parent: parentWindow || undefined,
+      modal: Boolean(parentWindow),
+      show: true,
+      autoHideMenuBar: true,
+      title: "Sign in with Microsoft - Legends Launcher",
+      backgroundColor: "#050811",
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+
+    let handled = false;
+
+    const checkUrl = async (url) => {
+      if (handled || !url) return;
+      if (url.startsWith(redirectUri)) {
+        handled = true;
+        try {
+          const parsedUrl = new URL(url);
+          const code = parsedUrl.searchParams.get("code");
+          const error = parsedUrl.searchParams.get("error");
+          const errorDesc = parsedUrl.searchParams.get("error_description");
+
+          try {
+            loginWin.close();
+          } catch (_) {}
+
+          if (error) {
+            reject(new Error(errorDesc || error || "Microsoft authentication canceled."));
+            return;
+          }
+
+          if (!code) {
+            reject(new Error("No authorization code received from Microsoft."));
+            return;
+          }
+
+          const xbox = await authManager.login(code, redirectUri);
+          const mc = await xbox.getMinecraft();
+          if (mc.isDemo()) {
+            reject(new Error("This Microsoft account does not own Minecraft (Demo account)."));
+            return;
+          }
+
+          resolve(mc);
+        } catch (err) {
+          reject(err);
+        }
+      }
+    };
+
+    loginWin.webContents.on("will-navigate", (_event, url) => {
+      checkUrl(url);
+    });
+
+    loginWin.webContents.on("will-redirect", (_event, url) => {
+      checkUrl(url);
+    });
+
+    loginWin.webContents.on("did-finish-load", () => {
+      checkUrl(loginWin.webContents.getURL());
+    });
+
+    loginWin.on("closed", () => {
+      if (!handled) {
+        handled = true;
+        reject(new Error("Sign-in window was closed."));
+      }
+    });
+
+    loginWin.loadURL(authUrl).catch((err) => {
+      if (!handled) {
+        handled = true;
+        reject(err);
+      }
+    });
+  });
+}
+
+ipcMain.handle("launcher:auth-get", async () => {
+  if (currentMclcUser) {
+    const check = await ensureValidAuth(currentMclcUser);
+    if (check.ok) {
+      currentMclcUser = check.profile;
+      return {
+        authenticated: true,
         profile: {
-          name: mcResult.profile.name,
-          uuid: mcResult.profile.id,
-          access_token: mcResult.access_token,
-          xuid: mcResult.profile.xuid
+          name: currentMclcUser.name,
+          uuid: currentMclcUser.uuid
         }
       };
-    } else {
-      return { ok: false, message: "Login failed or cancelled." };
     }
+  }
+
+  const saved = loadSavedAuthProfile();
+  if (saved) {
+    const check = await ensureValidAuth(saved);
+    if (check.ok) {
+      currentMclcUser = check.profile;
+      return {
+        authenticated: true,
+        profile: {
+          name: currentMclcUser.name,
+          uuid: currentMclcUser.uuid
+        }
+      };
+    }
+  }
+
+  currentMclcUser = null;
+  return { authenticated: false };
+});
+
+ipcMain.handle("launcher:auth-login", async () => {
+  try {
+    const mc = await loginWithMicrosoft(mainWindow);
+    const mclcAuth = mc.mclc(true);
+    saveAuthProfile(mclcAuth);
+    currentMclcUser = mclcAuth;
+    return {
+      ok: true,
+      profile: {
+        name: mclcAuth.name,
+        uuid: mclcAuth.uuid
+      }
+    };
   } catch (error) {
-    return { ok: false, message: error.message };
+    return { ok: false, message: error.message || "Login failed." };
+  }
+});
+
+ipcMain.handle("launcher:auth-logout", async () => {
+  currentMclcUser = null;
+  clearAuthProfile();
+  return { ok: true };
+});
+
+ipcMain.handle("launcher:auth", async () => {
+  try {
+    const mc = await loginWithMicrosoft(mainWindow);
+    const mclcAuth = mc.mclc(true);
+    saveAuthProfile(mclcAuth);
+    currentMclcUser = mclcAuth;
+    return {
+      ok: true,
+      profile: {
+        name: mclcAuth.name,
+        uuid: mclcAuth.uuid
+      }
+    };
+  } catch (error) {
+    return { ok: false, message: error.message || "Login failed." };
   }
 });
 
@@ -383,10 +605,46 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     activeLauncher = null;
   }
 
+  // Strictly enforce verified Microsoft authentication
+  let authToUse = currentMclcUser;
+  if (!authToUse) {
+    const saved = loadSavedAuthProfile();
+    if (saved) {
+      const valid = await ensureValidAuth(saved);
+      if (valid.ok) {
+        authToUse = valid.profile;
+        currentMclcUser = valid.profile;
+      }
+    }
+  }
+
+  if (!authToUse || !authToUse.access_token || authToUse.access_token === "0" || !authToUse.name) {
+    return {
+      ok: false,
+      message: "Microsoft authentication is required. Please sign in to launch Minecraft."
+    };
+  }
+
+  const freshCheck = await ensureValidAuth(authToUse);
+  if (!freshCheck.ok) {
+    return {
+      ok: false,
+      message: freshCheck.message || "Authentication expired. Please sign in again."
+    };
+  }
+  authToUse = freshCheck.profile;
+  currentMclcUser = freshCheck.profile;
+
+  const enforcedConfig = {
+    ...launchConfig,
+    auth: authToUse,
+    username: authToUse.name
+  };
+
   try {
-    const launchVersion = launchConfig?.version || "unknown version";
-    const serverHost = launchConfig?.serverHost || "unknown";
-    const serverPort = launchConfig?.serverPort || "?";
+    const launchVersion = enforcedConfig?.version || "unknown version";
+    const serverHost = enforcedConfig?.serverHost || "unknown";
+    const serverPort = enforcedConfig?.serverPort || "?";
     let currentPresenceState = getPresenceState(serverHost, serverPort);
     let hasSwitchedToInGame = false;
 
@@ -410,7 +668,7 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
       });
     }, 20000);
 
-    activeLauncher = await launchMinecraft(launchConfig, {
+    activeLauncher = await launchMinecraft(enforcedConfig, {
       onStatus: (message) => {
         sendStatus(message);
 

@@ -5,10 +5,12 @@ A custom, high-performance Minecraft launcher built with Electron and `minecraft
 ## Features
 
 - Branded desktop launcher window (custom title bar, dark UI)
-- Launches Minecraft with chosen version and username
+- **Official Microsoft & Xbox Live authentication** — license verification enforced (unlicensed/demo accounts blocked)
+- **Persistent login session** — automatic silent token refresh across app restarts
+- Launches Minecraft with chosen version and authenticated gamertag
 - Default private server host/port passed at launch
 - Live log streaming to the launcher UI
-- **Settings persistence** — username, version, server, memory and profile are saved automatically and restored on next launch
+- **Settings persistence** — version, server, memory, and mod profile are saved automatically
 - One-click parkour speedrunner mod pack installer (Fabric + Modrinth)
 - Competitive mod profile (Sodium, Lithium, FerriteCore, EntityCulling)
 - Discord Rich Presence with dynamic states (idle, downloading, installing, in-game)
@@ -16,8 +18,7 @@ A custom, high-performance Minecraft launcher built with Electron and `minecraft
 
 ## Important notes
 
-- Legends Launcher currently utilizes **offline mode authentication** (username-only local profile).
-- For public distribution or premium account enforcement, add Microsoft/Xbox Live auth before shipping.
+- **Microsoft Account Required**: All launches require an active, authenticated Microsoft account that owns a valid Minecraft license.
 - Users still need a Java runtime installed for Minecraft.
 
 ## Prerequisites

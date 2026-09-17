@@ -24,16 +24,18 @@ const maxMemoryInput = document.getElementById("maxMemoryMb");
 const installParkourPackInput = document.getElementById("installParkourPack");
 const installFpsHudInput = document.getElementById("installFpsHud");
 const profileAvatar = document.getElementById("profileAvatar");
-const msLoginBtn = document.getElementById("msLoginBtn");
+const msAuthBtn = document.getElementById("msAuthBtn");
+const msAuthBtnText = document.getElementById("msAuthBtnText");
+const authBadge = document.getElementById("authBadge");
 
 let currentAuth = null;
+let isAuthenticating = false;
 
 // --- Settings persistence ---
 
 const SETTINGS_KEY = "legends_launcher_settings";
 
 const SETTINGS_FIELDS = [
-  { el: usernameInput,        key: "username",           type: "text" },
   { el: versionInput,         key: "version",            type: "text" },
   { el: launchProfileInput,   key: "launchProfile",      type: "text" },
   { el: serverHostInput,      key: "serverHost",         type: "text" },
@@ -54,10 +56,6 @@ function loadSettings() {
           field.el.value = saved[field.key];
         }
       }
-    }
-    const savedName = saved.username ? saved.username.trim() : "Steve";
-    if (profileAvatar) {
-      profileAvatar.src = `https://minotar.net/helm/${savedName}/200.png`;
     }
   } catch (_e) {
     // Corrupted storage — ignore and use defaults.
@@ -84,46 +82,169 @@ for (const field of SETTINGS_FIELDS) {
   field.el.addEventListener(event, saveSettings);
 }
 
-// Restore on load
+// Restore configuration on load
 loadSettings();
 
-// --- Avatar ---
+// --- Auth State Handlers ---
 
-usernameInput.addEventListener("blur", () => {
-  const name = usernameInput.value.trim() || "Steve";
-  if (profileAvatar) profileAvatar.src = `https://minotar.net/helm/${name}/200.png`;
-  saveSettings();
-});
+function setAuthenticatedState(profile) {
+  currentAuth = profile;
+  usernameInput.value = profile.name;
+  usernameInput.readOnly = true;
 
-// --- Launcher ---
+  if (profileAvatar) {
+    profileAvatar.src = `https://mc-heads.net/avatar/${profile.name}/200.png`;
+    profileAvatar.onerror = () => {
+      profileAvatar.src = `https://minotar.net/helm/${profile.name}/200.png`;
+    };
+    profileAvatar.title = `Signed in as ${profile.name}`;
+  }
+
+  if (authBadge) {
+    authBadge.textContent = "VERIFIED";
+    authBadge.className = "auth-badge auth";
+  }
+
+  if (msAuthBtnText) {
+    msAuthBtnText.textContent = "Sign Out";
+  }
+  if (msAuthBtn) {
+    msAuthBtn.title = `Signed in as ${profile.name}. Click to sign out.`;
+  }
+
+  if (launchBtn.textContent !== "RUNNING" && launchBtn.textContent !== "STARTING...") {
+    launchBtn.disabled = false;
+    launchBtn.textContent = "PLAY";
+    setStatus(`Ready to play as ${profile.name}`);
+  }
+}
+
+function setUnauthenticatedState() {
+  currentAuth = null;
+  usernameInput.value = "";
+  usernameInput.placeholder = "Sign in required...";
+  usernameInput.readOnly = true;
+
+  if (profileAvatar) {
+    profileAvatar.src = "https://mc-heads.net/avatar/MHF_Steve/200.png";
+    profileAvatar.title = "Click to sign in with Microsoft";
+  }
+
+  if (authBadge) {
+    authBadge.textContent = "NOT SIGNED IN";
+    authBadge.className = "auth-badge unauth";
+  }
+
+  if (msAuthBtnText) {
+    msAuthBtnText.textContent = "Sign In";
+  }
+  if (msAuthBtn) {
+    msAuthBtn.title = "Sign in with Microsoft";
+  }
+
+  if (launchBtn.textContent !== "RUNNING" && launchBtn.textContent !== "STARTING...") {
+    launchBtn.disabled = false;
+    launchBtn.textContent = "SIGN IN TO PLAY";
+    setStatus("Microsoft account required to play.", true);
+  }
+}
+
+async function handleLogin() {
+  if (isAuthenticating) return;
+  isAuthenticating = true;
+
+  if (msAuthBtn) msAuthBtn.disabled = true;
+  launchBtn.disabled = true;
+  if (msAuthBtnText) msAuthBtnText.textContent = "Signing in...";
+  setStatus("Signing in with Microsoft...");
+  pushLog("Opening Microsoft sign-in window...");
+
+  try {
+    const result = await window.launcherApi.login();
+    if (result && result.ok && result.profile) {
+      setAuthenticatedState(result.profile);
+      pushLog(`Microsoft Auth Success: ${result.profile.name}`);
+      setStatus(`Logged in as ${result.profile.name}`);
+    } else {
+      setUnauthenticatedState();
+      const msg = result?.message || "Sign-in was cancelled or failed.";
+      setStatus(msg, true);
+      pushLog(`Auth: ${msg}`);
+    }
+  } catch (error) {
+    setUnauthenticatedState();
+    const msg = error?.message || "Authentication error.";
+    setStatus(msg, true);
+    pushLog(`Auth Error: ${msg}`);
+  } finally {
+    isAuthenticating = false;
+    if (msAuthBtn) msAuthBtn.disabled = false;
+  }
+}
+
+async function handleLogout() {
+  if (msAuthBtn) msAuthBtn.disabled = true;
+  if (msAuthBtnText) msAuthBtnText.textContent = "Signing out...";
+  try {
+    await window.launcherApi.logout();
+    setUnauthenticatedState();
+    setStatus("Signed out. Sign in with Microsoft to play.");
+    pushLog("Signed out of Microsoft account.");
+  } catch (error) {
+    pushLog(`Logout Error: ${error.message}`);
+  } finally {
+    if (msAuthBtn) msAuthBtn.disabled = false;
+  }
+}
+
+async function checkInitialAuth() {
+  setStatus("Checking Microsoft account...");
+  try {
+    const res = await window.launcherApi.getAuth();
+    if (res && res.authenticated && res.profile) {
+      setAuthenticatedState(res.profile);
+      pushLog(`Active Microsoft session: ${res.profile.name}`);
+    } else {
+      setUnauthenticatedState();
+    }
+  } catch (_e) {
+    setUnauthenticatedState();
+  }
+}
+
+// Initial check on load
+checkInitialAuth();
+
+// --- Event Listeners ---
+
+if (msAuthBtn) {
+  msAuthBtn.addEventListener("click", () => {
+    if (currentAuth) {
+      handleLogout();
+    } else {
+      handleLogin();
+    }
+  });
+}
+
+if (profileAvatar) {
+  profileAvatar.addEventListener("click", () => {
+    if (!currentAuth) {
+      handleLogin();
+    } else {
+      const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+      if (settingsNav) settingsNav.click();
+    }
+  });
+}
+
+// --- Status & Logs ---
 
 function pushLog(message) {
   const timestamp = new Date().toLocaleTimeString();
   logsEl.textContent += `[${timestamp}] ${message}\n`;
   logsEl.scrollTop = logsEl.scrollHeight;
 }
-
-msLoginBtn.addEventListener("click", async () => {
-  msLoginBtn.disabled = true;
-  msLoginBtn.textContent = "Logging in...";
-  setStatus("Authenticating with Microsoft...");
-
-  const result = await window.launcherApi.auth();
-  if (result.ok) {
-    currentAuth = result.profile;
-    usernameInput.value = result.profile.name;
-    if (profileAvatar) profileAvatar.src = `https://minotar.net/helm/${result.profile.name}/200.png`;
-    setStatus(`Logged in as ${result.profile.name}`);
-    pushLog(`Microsoft Auth Success: ${result.profile.name}`);
-    saveSettings();
-  } else {
-    setStatus(result.message, true);
-    pushLog(`Auth Error: ${result.message}`);
-  }
-
-  msLoginBtn.disabled = false;
-  msLoginBtn.textContent = "Microsoft Login";
-});
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -135,14 +256,14 @@ const unsubscribe = window.launcherApi.onStatus((message) => {
 
   if (message.includes("Minecraft closed.")) {
     launchBtn.disabled = false;
-    launchBtn.textContent = "PLAY";
+    launchBtn.textContent = currentAuth ? "PLAY" : "SIGN IN TO PLAY";
     setStatus("Minecraft closed. Ready to launch again.");
     return;
   }
 
   if (message.includes("Launch error:")) {
     launchBtn.disabled = false;
-    launchBtn.textContent = "PLAY";
+    launchBtn.textContent = currentAuth ? "PLAY" : "SIGN IN TO PLAY";
     setStatus(message, true);
     return;
   }
@@ -157,14 +278,21 @@ window.addEventListener("beforeunload", () => {
   if (typeof unsubscribe === "function") unsubscribe();
 });
 
+// --- Launch Action ---
+
 launchBtn.addEventListener("click", async () => {
+  if (!currentAuth) {
+    await handleLogin();
+    return;
+  }
+
   launchBtn.disabled = true;
   launchBtn.textContent = "STARTING...";
   setStatus("Starting launch sequence...");
   saveSettings();
 
   const config = {
-    username: usernameInput.value,
+    username: currentAuth.name,
     version: versionInput.value,
     launchProfile: launchProfileInput.value,
     serverHost: serverHostInput.value,
@@ -180,7 +308,7 @@ launchBtn.addEventListener("click", async () => {
     setStatus(result.message, true);
     pushLog(`ERROR: ${result.message}`);
     launchBtn.disabled = false;
-    launchBtn.textContent = "PLAY";
+    launchBtn.textContent = currentAuth ? "PLAY" : "SIGN IN TO PLAY";
     return;
   }
 

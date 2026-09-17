@@ -408,6 +408,30 @@
       color: #ff4b4b;
     }
 
+    .auth-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      margin-left: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    .auth-badge.unauth {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .auth-badge.auth {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
     /* Settings View */
     .settings-grid {
       display: grid;
@@ -614,8 +638,8 @@
         </div>
 
         <div class="launch-section">
-          <button id="launchBtn" class="giant-launch-btn">PLAY</button>
-          <div id="status" class="status-text">Ready to launch</div>
+          <button id="launchBtn" class="giant-launch-btn">SIGN IN TO PLAY</button>
+          <div id="status" class="status-text">Microsoft account required</div>
         </div>
       </div>
 
@@ -628,12 +652,12 @@
           <div class="settings-grid">
             <div>
               <div class="field-group">
-                <label>Display Name</label>
+                <label>Microsoft Account <span id="authBadge" class="auth-badge unauth">Not Signed In</span></label>
                 <div style="display: flex; gap: 10px;">
-                  <input id="username" type="text" value="Soumya_legend1" />
-                  <button id="msLoginBtn" style="flex-shrink: 0; background: #2f2f2f; border: 1px solid var(--glass-border); border-radius: 12px; color: #fff; padding: 0 15px; cursor: pointer; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+                  <input id="username" type="text" value="" readonly style="cursor: not-allowed; opacity: 0.85;" placeholder="Sign in with Microsoft..." />
+                  <button id="msAuthBtn" style="flex-shrink: 0; background: #1e293b; border: 1px solid var(--glass-border); border-radius: 12px; color: #fff; padding: 0 16px; cursor: pointer; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s;">
                     <svg style="width: 14px; height: 14px;" viewBox="0 0 23 23"><path fill="#f3f3f3" d="M0 0h11v11H0zM12 0h11v11H12zM0 12h11v11H0zM12 12h11v11H12z"/></svg>
-                    Microsoft Login
+                    <span id="msAuthBtnText">Sign In</span>
                   </button>
                 </div>
               </div>

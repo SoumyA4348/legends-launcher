@@ -158,7 +158,7 @@ function forcePerformanceVideoSettings(minecraftRoot, hooks) {
     enableVsync: "false",
     maxFps: "240",
     framerateLimit: "240",
-    prioritizeChunkUpdates: "2",
+    prioritizeChunkUpdates: "0",
     renderDistance: "10",
     simulationDistance: "8",
     entityDistanceScaling: "0.8"
@@ -190,7 +190,7 @@ function forcePerformanceVideoSettings(minecraftRoot, hooks) {
   }
 
   if (!changed && fs.existsSync(optionsPath)) {
-    hooks.onStatus("Performance settings already applied (stable FPS + chunk priorities).");
+    hooks.onStatus("Performance settings already applied (stable FPS + threaded chunk updates).");
     return;
   }
 
@@ -198,7 +198,7 @@ function forcePerformanceVideoSettings(minecraftRoot, hooks) {
     .map(([key, value]) => `${key}:${value}`)
     .join("\n")}\n`;
   fs.writeFileSync(optionsPath, serialized, "utf8");
-  hooks.onStatus("Applied performance settings: VSync off, 240 FPS cap, chunk updates prioritized.");
+  hooks.onStatus("Applied performance settings: VSync off, 240 FPS cap, threaded chunk updates.");
 }
 
 async function ensureFabricProfile(version, minecraftRoot, hooks) {
@@ -480,7 +480,12 @@ async function launchMinecraft(config, hooks) {
     hooks.onExit();
   };
 
-  const username = String(config?.username || "").trim();
+  const auth = config?.auth;
+  if (!auth || !auth.access_token || auth.access_token === "0" || !auth.name) {
+    throw new Error("Microsoft authentication is required. Please sign in with an official Microsoft account to launch Minecraft.");
+  }
+
+  const username = String(auth.name).trim();
   const version = String(config?.version || "").trim();
   const serverHost = String(config?.serverHost || "").trim();
   const serverPort = sanitizePort(config?.serverPort || 25565);
@@ -489,10 +494,6 @@ async function launchMinecraft(config, hooks) {
   const installFpsHud = parseBoolean(config?.installFpsHud, true);
   const launchProfile = normalizeLaunchProfile(config?.launchProfile);
 
-  if (!username) {
-    throw new Error("Username is required.");
-  }
-
   if (!version) {
     throw new Error("Minecraft version is required.");
   }
@@ -500,8 +501,6 @@ async function launchMinecraft(config, hooks) {
   if (!serverHost) {
     throw new Error("Server host is required.");
   }
-
-  const offlineUuid = usernameToOfflineUuid(username);
   const appDataPath =
     app && typeof app.getPath === "function" ? app.getPath("appData") : process.cwd();
   const minecraftRoot = path.join(appDataPath, "PrivateCustomMinecraftLauncher", ".minecraft");
@@ -585,16 +584,9 @@ async function launchMinecraft(config, hooks) {
 
   forcePerformanceVideoSettings(minecraftRoot, hooks);
 
-  // Microsoft Auth or Offline Auth
-  let auth = config?.auth;
-  if (!auth) {
-    auth = {
-      access_token: "0",
-      client_token: crypto.randomBytes(16).toString("hex"),
-      uuid: offlineUuid,
-      name: username,
-      user_properties: {}
-    };
+  // Verified Microsoft Auth credentials
+  if (!auth || !auth.access_token || auth.access_token === "0") {
+    throw new Error("Missing or invalid Microsoft authentication credentials.");
   }
 
   // Check for Java 21 installation
@@ -608,20 +600,19 @@ async function launchMinecraft(config, hooks) {
     ...(hasJava21 ? { javaPath: java21Path } : {}),
     memory: {
       max: `${maxMemoryMb}M`,
-      min: `${Math.min(512, maxMemoryMb)}M`
+      min: `${maxMemoryMb}M`
     },
     customArgs: [
       "-XX:+UnlockExperimentalVMOptions",
       "-XX:+UseG1GC",
-      "-XX:MaxGCPauseMillis=45",
-      "-XX:G1NewSizePercent=20",
-      "-XX:G1ReservePercent=20",
-      "-XX:InitiatingHeapOccupancyPercent=15",
-      "-XX:G1MixedGCCountTarget=4",
-      "-XX:SurvivorRatio=32",
-      "-XX:MaxTenuringThreshold=1",
+      "-XX:MaxGCPauseMillis=130",
+      "-XX:+ParallelRefProcEnabled",
+      "-XX:+AlwaysPreTouch",
       "-XX:+PerfDisableSharedMem",
-      "-XX:-UseAdaptiveSizePolicy",
+      "-XX:G1HeapWastePercent=5",
+      "-XX:G1MixedGCCountTarget=8",
+      "-XX:G1MixedGCLiveThresholdPercent=90",
+      "-XX:G1HeapRegionSize=16M",
       "-XX:-OmitStackTraceInFastThrow"
     ],
     quickPlay: {
