@@ -31,7 +31,7 @@ const COMPETITIVE_MODS = [
 
 const FPS_HUD_MODS = [
   { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
-  { projects: ["fps-monitor"], name: "FPS Monitor" }
+  { projects: ["fpsdisplay", "fps-monitor"], name: "FPS Display" }
 ];
 
 const MANAGED_MODS_STATE_FILE = ".launcher-managed-mods.json";
@@ -119,34 +119,71 @@ function fetchJson(url, timeoutMs = 15000) {
   });
 }
 
-function downloadFile(url, destinationPath) {
+function downloadFile(url, destinationPath, maxRedirects = 5) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destinationPath);
+    if (maxRedirects <= 0) {
+      reject(new Error(`Too many redirects when downloading ${url}`));
+      return;
+    }
+
+    const tempPath = `${destinationPath}.tmp`;
+    const file = fs.createWriteStream(tempPath);
+
+    const cleanup = () => {
+      try {
+        file.close();
+      } catch (_e) {}
+      try {
+        if (fs.existsSync(tempPath)) {
+          fs.rmSync(tempPath, { force: true });
+        }
+      } catch (_e) {}
+    };
 
     const request = https.get(url, (response) => {
-      if (response.statusCode && response.statusCode >= 400) {
-        file.close();
-        fs.rmSync(destinationPath, { force: true });
-        reject(new Error(`Download failed (${response.statusCode}) for ${url}`));
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        cleanup();
         response.resume();
+        const redirectUrl = new URL(response.headers.location, url).toString();
+        downloadFile(redirectUrl, destinationPath, maxRedirects - 1)
+          .then(resolve)
+          .catch(reject);
+        return;
+      }
+
+      if (response.statusCode && response.statusCode >= 400) {
+        cleanup();
+        response.resume();
+        reject(new Error(`Download failed (${response.statusCode}) for ${url}`));
         return;
       }
 
       response.pipe(file);
       file.on("finish", () => {
-        file.close(() => resolve());
+        file.close((err) => {
+          if (err) {
+            cleanup();
+            reject(err);
+            return;
+          }
+          try {
+            fs.renameSync(tempPath, destinationPath);
+            resolve();
+          } catch (renameErr) {
+            cleanup();
+            reject(renameErr);
+          }
+        });
       });
     });
 
     request.on("error", (error) => {
-      file.close();
-      fs.rmSync(destinationPath, { force: true });
+      cleanup();
       reject(error);
     });
 
     file.on("error", (error) => {
-      file.close();
-      fs.rmSync(destinationPath, { force: true });
+      cleanup();
       reject(error);
     });
   });
@@ -244,6 +281,57 @@ async function ensureFabricProfile(version, minecraftRoot, hooks) {
   return profileId;
 }
 
+// ZIP local file header magic: 50 4B 03 04
+// ZIP end-of-central-directory (EOCD) signature: 50 4B 05 06
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+const EOCD_SIG = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
+// Minimum valid ZIP size: local file header(30) + EOCD(22) = 52 bytes
+const MIN_ZIP_SIZE = 52;
+// EOCD is at least 22 bytes; we scan the last 65557 bytes (max comment length + EOCD)
+const EOCD_SCAN_SIZE = 65557 + 22;
+
+function isJarCorrupted(jarPath) {
+  let fd = -1;
+  try {
+    const stat = fs.statSync(jarPath);
+    if (stat.size < MIN_ZIP_SIZE) {
+      return true;
+    }
+    fd = fs.openSync(jarPath, "r");
+
+    const headBuf = Buffer.alloc(4);
+    fs.readSync(fd, headBuf, 0, 4, 0);
+    if (!headBuf.equals(ZIP_MAGIC)) {
+      return true;
+    }
+
+    const scanSize = Math.min(stat.size, EOCD_SCAN_SIZE);
+    const tailBuf = Buffer.alloc(scanSize);
+    fs.readSync(fd, tailBuf, 0, scanSize, stat.size - scanSize);
+    for (let i = tailBuf.length - 4; i >= 0; i--) {
+      if (
+        tailBuf[i] === EOCD_SIG[0] &&
+        tailBuf[i + 1] === EOCD_SIG[1] &&
+        tailBuf[i + 2] === EOCD_SIG[2] &&
+        tailBuf[i + 3] === EOCD_SIG[3]
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch (_error) {
+    return true;
+  } finally {
+    if (fd !== -1) {
+      try {
+        fs.closeSync(fd);
+      } catch (_error) {
+        // ignore close errors
+      }
+    }
+  }
+}
+
 async function ensureParkourMods(version, minecraftRoot, hooks) {
   return ensureMods(version, minecraftRoot, hooks, PARKOUR_SPEEDRUNNER_MODS);
 }
@@ -298,8 +386,12 @@ async function ensureMods(version, minecraftRoot, hooks, modsList) {
     const targetPath = path.join(modsDir, safeFilename);
     selectedFileNames.push(safeFilename);
     if (fs.existsSync(targetPath)) {
-      hooks.onStatus(`${mod.name} already installed.`);
-      continue;
+      if (!isJarCorrupted(targetPath)) {
+        hooks.onStatus(`${mod.name} already installed.`);
+        continue;
+      }
+      fs.rmSync(targetPath, { force: true });
+      hooks.onStatus(`Corrupted mod detected, re-downloading ${mod.name}...`);
     }
 
     hooks.onStatus(`Downloading ${mod.name} (${safeFilename})...`);
@@ -364,70 +456,8 @@ function validateAndRepairLibraries(minecraftRoot, hooks) {
   const jars = walkDir(librariesDir, ".jar");
   let deletedCount = 0;
 
-  // ZIP local file header magic: 50 4B 03 04
-  // ZIP end-of-central-directory (EOCD) signature: 50 4B 05 06
-  // A valid ZIP must start with the local file header magic AND end with the EOCD record.
-  // Checking only the first 4 bytes misses truncated files that start correctly but are
-  // incomplete (causing "zip END header not found" at runtime).
-  const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-  const EOCD_SIG = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
-  // Minimum valid ZIP size: local file header(30) + EOCD(22) = 52 bytes
-  const MIN_ZIP_SIZE = 52;
-  // EOCD is at least 22 bytes; we scan the last 65557 bytes (max comment length + EOCD)
-  const EOCD_SCAN_SIZE = 65557 + 22;
-
   for (const jarPath of jars) {
-    let isCorrupted = false;
-    let fd = -1;
-
-    try {
-      const stat = fs.statSync(jarPath);
-      if (stat.size < MIN_ZIP_SIZE) {
-        isCorrupted = true;
-      } else {
-        fd = fs.openSync(jarPath, "r");
-
-        // Check start magic
-        const headBuf = Buffer.alloc(4);
-        fs.readSync(fd, headBuf, 0, 4, 0);
-        if (!headBuf.equals(ZIP_MAGIC)) {
-          isCorrupted = true;
-        } else {
-          // Check EOCD signature exists somewhere in the last EOCD_SCAN_SIZE bytes
-          const scanSize = Math.min(stat.size, EOCD_SCAN_SIZE);
-          const tailBuf = Buffer.alloc(scanSize);
-          fs.readSync(fd, tailBuf, 0, scanSize, stat.size - scanSize);
-          // Search backwards for EOCD signature
-          let foundEocd = false;
-          for (let i = tailBuf.length - 4; i >= 0; i--) {
-            if (
-              tailBuf[i] === EOCD_SIG[0] &&
-              tailBuf[i + 1] === EOCD_SIG[1] &&
-              tailBuf[i + 2] === EOCD_SIG[2] &&
-              tailBuf[i + 3] === EOCD_SIG[3]
-            ) {
-              foundEocd = true;
-              break;
-            }
-          }
-          if (!foundEocd) {
-            isCorrupted = true;
-          }
-        }
-      }
-    } catch (_error) {
-      isCorrupted = true;
-    } finally {
-      if (fd !== -1) {
-        try {
-          fs.closeSync(fd);
-        } catch (_error) {
-          // ignore close errors
-        }
-      }
-    }
-
-    if (isCorrupted) {
+    if (isJarCorrupted(jarPath)) {
       try {
         fs.rmSync(jarPath, { force: true });
         hooks.onStatus(`Removed corrupted library: ${path.basename(jarPath)}`);
@@ -443,25 +473,63 @@ function validateAndRepairLibraries(minecraftRoot, hooks) {
   }
 }
 
+function validateAndRepairMods(minecraftRoot, hooks) {
+  const modsDir = path.join(minecraftRoot, "mods");
+  if (!fs.existsSync(modsDir)) {
+    return;
+  }
+
+  const jars = walkDir(modsDir, ".jar");
+  let deletedCount = 0;
+
+  for (const jarPath of jars) {
+    if (isJarCorrupted(jarPath)) {
+      try {
+        fs.rmSync(jarPath, { force: true });
+        hooks.onStatus(`Removed corrupted mod: ${path.basename(jarPath)}`);
+        deletedCount += 1;
+      } catch (_error) {
+        // ignore deletion errors
+      }
+    }
+  }
+
+  if (deletedCount > 0) {
+    hooks.onStatus("Corrupted mod(s) removed.");
+  }
+}
+
 function pruneManagedMods(minecraftRoot, selectedFiles, hooks) {
-  const { files: previousFiles } = readManagedModsState(minecraftRoot);
   const selectedSet = new Set(selectedFiles);
   const modsDir = path.join(minecraftRoot, "mods");
-  let removedCount = 0;
+  if (!fs.existsSync(modsDir)) {
+    return;
+  }
 
-  for (const fileName of previousFiles) {
-    if (selectedSet.has(fileName)) {
+  let removedCount = 0;
+  let existingFiles = [];
+  try {
+    existingFiles = fs.readdirSync(modsDir);
+  } catch (_e) {
+    return;
+  }
+
+  for (const fileName of existingFiles) {
+    if (!fileName.endsWith(".jar")) {
       continue;
     }
-    const filePath = path.join(modsDir, fileName);
-    if (fs.existsSync(filePath)) {
-      fs.rmSync(filePath, { force: true });
-      removedCount += 1;
+    if (!selectedSet.has(fileName)) {
+      const filePath = path.join(modsDir, fileName);
+      try {
+        fs.rmSync(filePath, { force: true });
+        removedCount += 1;
+        hooks.onStatus(`Cleaned incompatible/stale mod: ${fileName}`);
+      } catch (_e) {}
     }
   }
 
   if (removedCount > 0) {
-    hooks.onStatus(`Cleaned ${removedCount} old managed mod(s) for selected profile.`);
+    hooks.onStatus(`Cleaned ${removedCount} incompatible or old mod(s) for version.`);
   }
 }
 
@@ -625,6 +693,7 @@ async function launchMinecraft(config, hooks) {
   };
 
   validateAndRepairLibraries(minecraftRoot, hooks);
+  validateAndRepairMods(minecraftRoot, hooks);
   hooks.onStatus(`Preparing Minecraft ${version} for ${username}...`);
 
   launcher.on("debug", (line) => hooks.onStatus(`DEBUG: ${line}`));
