@@ -396,6 +396,14 @@ async function ensureMods(version, minecraftRoot, hooks, modsList) {
 
     hooks.onStatus(`Downloading ${mod.name} (${safeFilename})...`);
     await downloadFile(fileMeta.url, targetPath);
+    const expectedSha512 = fileMeta.hashes?.sha512;
+    if (expectedSha512) {
+      const actualSha512 = crypto.createHash("sha512").update(fs.readFileSync(targetPath)).digest("hex");
+      if (actualSha512 !== expectedSha512) {
+        fs.rmSync(targetPath, { force: true });
+        throw new Error(`Checksum mismatch for ${mod.name} (${safeFilename}); download discarded.`);
+      }
+    }
     hooks.onStatus(`Installed ${mod.name}.`);
   }
 
