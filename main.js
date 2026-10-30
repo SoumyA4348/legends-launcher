@@ -9,6 +9,36 @@ const { listReleaseVersions } = require("./src/java");
 const { pingServer } = require("./src/server-status");
 const presence = require("./src/presence");
 const accounts = require("./src/accounts");
+const analytics = require("./src/analytics");
+
+// Public Aptabase app key (it ships inside the app either way). Empty = stats disabled.
+const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY || "";
+
+function getAnalyticsSettingsPath() {
+  return path.join(app.getPath("userData"), "analytics.json");
+}
+
+// On by default; players can turn it off in Settings.
+function isAnalyticsEnabled() {
+  try {
+    return JSON.parse(fs.readFileSync(getAnalyticsSettingsPath(), "utf8")).enabled !== false;
+  } catch (_error) {
+    return true;
+  }
+}
+
+let stats = null;
+function track(eventName, props) {
+  if (!stats) {
+    stats = analytics.createAnalytics({
+      appKey: APTABASE_APP_KEY,
+      appVersion: require("./package.json").version,
+      isEnabled: isAnalyticsEnabled,
+      isDebug: !app.isPackaged
+    });
+  }
+  stats.track(eventName, props);
+}
 const { formatVersion, parseConnectedServer } = presence;
 
 let mainWindow = null;
@@ -353,6 +383,10 @@ function createWindow() {
     setTimeout(() => {
       initializeDiscordRpc();
       initializeAutoUpdates();
+      track("app_started", {
+        ram: analytics.ramBucket(os.totalmem() / (1024 * 1024)),
+        accounts: accounts.listAccounts(readAccountStore()).length
+      });
     }, 1500);
   });
   // Links opened from the UI go to the default browser, never a new Electron window.
@@ -625,6 +659,7 @@ ipcMain.handle("launcher:auth-login", async () => {
     const mclcAuth = mc.mclc(true);
     saveAuthProfile(mclcAuth);
     currentMclcUser = mclcAuth;
+    track("account_added", { accounts: accounts.listAccounts(readAccountStore()).length });
     return {
       ok: true,
       profile: {
@@ -657,7 +692,26 @@ ipcMain.handle("launcher:accounts-switch", (_event, uuid) => {
   const next = accounts.switchAccount(store, uuid);
   writeAccountStore(next);
   currentMclcUser = accounts.activeAccount(next);
+  track("account_switched");
   return { ok: true, profile: { name: currentMclcUser.name, uuid: currentMclcUser.uuid } };
+});
+
+ipcMain.handle("launcher:analytics-get", () => ({ enabled: isAnalyticsEnabled(), configured: Boolean(analytics.hostForKey(APTABASE_APP_KEY)) }));
+
+ipcMain.handle("launcher:analytics-set", (_event, enabled) => {
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    fs.writeFileSync(getAnalyticsSettingsPath(), JSON.stringify({ enabled: enabled === true }));
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+});
+
+// The UI may report only these events; everything else is tracked here in the main process.
+const RENDERER_EVENTS = new Set(["content_added", "instance_created"]);
+ipcMain.handle("launcher:analytics-track", (_event, eventName, props) => {
+  if (RENDERER_EVENTS.has(eventName)) track(eventName, props);
 });
 
 ipcMain.handle("launcher:accounts-remove", (_event, uuid) => {
@@ -782,7 +836,9 @@ ipcMain.handle("launcher:install-update", () => {
   if (isGameRunning()) {
     return { ok: false, message: "Close Minecraft first. The update will also install when you quit the launcher." };
   }
-  autoUpdater.quitAndInstall();
+  track("update_installed");
+  // Give the event a moment to leave before the app quits.
+  setTimeout(() => autoUpdater.quitAndInstall(), 500);
   return { ok: true };
 });
 
@@ -844,9 +900,13 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
   const presenceFor = (smallImageKey, smallImageText) =>
     setDiscordPresence({ state: `${launchVersion} | ${currentPresenceState}`, smallImageKey, smallImageText });
 
+  const mcVersion = String(enforcedConfig?.version || "").slice(0, 16);
+  let gameStartedAt = 0;
   const markInGame = () => {
     if (isInGame) return;
     isInGame = true;
+    gameStartedAt = Date.now();
+    track("game_started", { mcVersion });
     clearInGameFallbackTimer();
     sendPhase("running", "Minecraft is running.");
     presenceFor("play_icon", "In game");
@@ -871,6 +931,14 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
   clearInGameFallbackTimer();
   stopRequested = false;
   lastCrashReport = null;
+  const extras = Array.isArray(launchConfig?.extraMods) ? launchConfig.extraMods : [];
+  track("launch_started", {
+    mcVersion,
+    profile: launchConfig?.launchProfile === "full" ? "full" : "competitive",
+    mods: extras.filter((item) => !item?.type || item.type === "mod").length,
+    packs: extras.filter((item) => item?.type && item.type !== "mod").length,
+    server: Boolean(enforcedConfig?.serverHost)
+  });
   sendPhase("preparing", "Starting launch sequence...");
   presenceFor("play_icon", "Starting");
 
@@ -910,14 +978,23 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
         // A game stopped from the launcher exits non-zero; that's not a crash.
         if (message.startsWith("Launch error:") && !stopRequested) {
           launchFailed = true;
+          // After the game is up, a non-zero exit is a crash (tracked on exit), not a failed launch.
+          if (!isInGame) {
+            track("launch_failed", { mcVersion, reason: analytics.errorCategory(message), stage: presenceStage || "start" });
+          }
           clearInGameFallbackTimer();
           sendPhase("error", message.slice("Launch error:".length).trim());
           presenceFor("minecraft_icon", "Check launcher logs");
         }
       },
-      onExit: ({ crashReport } = {}) => {
+      onExit: ({ code, crashReport } = {}) => {
         clearInGameFallbackTimer();
         activeLauncher = null;
+        if (isInGame && launchFailed && !stopRequested) {
+          track("game_crashed", { mcVersion, exitCode: Number(code) || 0, report: Boolean(crashReport) });
+        } else if (isInGame) {
+          track("game_closed", { mcVersion, played: analytics.minutesBucket(Date.now() - gameStartedAt), stopped: stopRequested });
+        }
         if (stopRequested) {
           sendPhase("idle", "Minecraft stopped.");
         } else if (!launchFailed) {
@@ -946,6 +1023,10 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     activeLauncher = null;
     clearInGameFallbackTimer();
     const message = error instanceof Error ? error.message : "Unknown launch failure.";
+    // launchMinecraft may already have reported this failure through onStatus.
+    if (!launchFailed) {
+      track("launch_failed", { mcVersion, reason: analytics.errorCategory(message), stage: presenceStage || "start" });
+    }
     sendPhase("error", message);
     return { ok: false, message };
   }

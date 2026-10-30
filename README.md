@@ -35,6 +35,11 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
 
 The installer needs no admin rights and installs for the current user only. Uninstalling asks whether to also delete game data (worlds, mods, Java, sign-in); auto-updates never touch it.
 
+## Privacy
+
+The launcher sends anonymous usage stats to [Aptabase](https://aptabase.com) (open source, no cookies, no stored IP addresses) so we can see which Minecraft versions people play and which launches fail. Events: launcher opened, launch started/failed, game started/closed/crashed, account added/switched, mod or pack added, instance created, update installed. Each carries only coarse details such as Minecraft version, mod count, an error category or a rounded play time.
+
+It never sends your Minecraft name, UUID, Microsoft tokens, server addresses or file paths. Turn it off any time in **Settings → Privacy**.
 ## Development
 
 ```bash

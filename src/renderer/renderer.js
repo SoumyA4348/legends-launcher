@@ -402,6 +402,7 @@ function createInstance() {
   applyInstance();
   onSettingsChanged();
   toast(`Created instance "${name}".`);
+  api.track("instance_created", { instances: instances.length }).catch(() => {});
 }
 
 $("newInstanceBtn").addEventListener("click", () => toggleNewInstanceRow(true));
@@ -521,6 +522,7 @@ function renderModResults() {
           return;
         }
         instance.extraMods.push({ slug: hit.slug, name: hit.name, iconUrl: hit.iconUrl, type: contentType });
+        api.track("content_added", { type: contentType }).catch(() => {});
         onModsChanged();
         toast(`${hit.name} will install on your next launch.`);
       });
@@ -1051,6 +1053,21 @@ $("updateBtn").addEventListener("click", async () => {
   if (result && !result.ok) toast(result.message, true);
 });
 
+// ---------- Privacy ----------
+// The toggle only shows in builds that have an analytics key.
+async function loadAnalyticsSetting() {
+  const state = await api.getAnalytics().catch(() => null);
+  if (!state?.configured) return;
+  $("privacyPanel").hidden = false;
+  $("analyticsToggle").checked = state.enabled;
+}
+
+$("analyticsToggle").addEventListener("change", async (event) => {
+  const result = await api.setAnalytics(event.target.checked).catch(() => null);
+  if (result?.ok) flashSaved();
+  else toast("Could not save that setting.", true);
+});
+
 // ---------- Boot ----------
 scene.mount($("scene"));
 loadSettings();
@@ -1060,4 +1077,5 @@ renderPlayButton();
 checkInitialAuth();
 loadSystemInfo();
 loadVersions();
+loadAnalyticsSetting();
 refreshServerStatus();
