@@ -10,6 +10,7 @@ const { pingServer } = require("./src/server-status");
 const presence = require("./src/presence");
 const accounts = require("./src/accounts");
 const analytics = require("./src/analytics");
+const skins = require("./src/skin");
 
 // Public Aptabase app key (it ships inside the app either way). Empty = stats disabled.
 const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY || "";
@@ -698,6 +699,25 @@ ipcMain.handle("launcher:auth-logout", async () => {
 });
 
 ipcMain.handle("launcher:accounts-list", () => accounts.listAccounts(readAccountStore()));
+
+// The active account's skin for the Play page. Looked up once per account per session; a
+// failed lookup (offline) isn't cached, so the next visit tries again.
+const skinCache = new Map();
+ipcMain.handle("launcher:skin", async () => {
+  const uuid = skins.normalizeUuid(currentMclcUser?.uuid);
+  if (!uuid) {
+    return null;
+  }
+  if (!skinCache.has(uuid)) {
+    try {
+      const profile = await fetchJson(`https://sessionserver.mojang.com/session/minecraft/profile/${uuid}`);
+      skinCache.set(uuid, skins.parseSkinProfile(profile, uuid));
+    } catch (_error) {
+      return skins.fallbackSkin(uuid);
+    }
+  }
+  return skinCache.get(uuid);
+});
 
 ipcMain.handle("launcher:accounts-switch", (_event, uuid) => {
   if (isGameRunning()) {

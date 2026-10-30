@@ -650,6 +650,94 @@ function renderAccount() {
   }
   $("addAccountBtn").hidden = !signedIn;
   renderAccountList();
+  loadSkin();
+}
+
+// ---------- Skin ----------
+// Applies the game's own skin clean-up so the preview matches what other players see: base
+// layers are fully opaque, and an old 64x32 skin whose hat layer has no transparency at all
+// gets that layer hidden (Minecraft's "Notch transparency hack").
+function prepareSkinTexture(image) {
+  const texture = document.createElement("canvas");
+  texture.width = 64;
+  texture.height = 64;
+  const ctx = texture.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  const legacy = image.height === 32;
+  try {
+    const pixels = ctx.getImageData(0, 0, 64, 64);
+    const alpha = pixels.data;
+    const region = (x0, y0, x1, y1, apply) => {
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) apply((y * 64 + x) * 4 + 3);
+    };
+    const opaque = (i) => (alpha[i] = 255);
+    region(0, 0, 32, 16, opaque);
+    if (legacy) {
+      let seeThrough = false;
+      region(32, 0, 64, 32, (i) => (seeThrough ||= alpha[i] < 128));
+      if (!seeThrough) region(32, 0, 64, 32, (i) => (alpha[i] = 0));
+    }
+    region(0, 16, 64, 32, opaque);
+    region(16, 48, 48, 64, opaque);
+    ctx.putImageData(pixels, 0, 0);
+  } catch (_error) {
+    // pixels unreadable: draw the skin as it came
+  }
+  return { texture, legacy };
+}
+
+// Front view of the player's skin, drawn at the texture's own 16x32 size and scaled up crisp by
+// CSS. Texture regions follow the standard skin layout; slim (Alex) arms are 3 pixels wide.
+function drawSkin(canvas, { texture: image, legacy }, slim) {
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const arm = slim ? 3 : 4;
+  const parts = [
+    { dx: 4, dy: 0, w: 8, h: 8, base: [8, 8], overlay: [40, 8] }, // head + hat
+    { dx: 4, dy: 8, w: 8, h: 12, base: [20, 20], overlay: [20, 36] }, // body + jacket
+    { dx: 4 - arm, dy: 8, w: arm, h: 12, base: [44, 20], overlay: [44, 36] }, // right arm
+    { dx: 12, dy: 8, w: arm, h: 12, base: [36, 52], overlay: [52, 52], mirrorOf: [44, 20] }, // left arm
+    { dx: 4, dy: 20, w: 4, h: 12, base: [4, 20], overlay: [4, 36] }, // right leg
+    { dx: 8, dy: 20, w: 4, h: 12, base: [20, 52], overlay: [4, 52], mirrorOf: [4, 20] } // left leg
+  ];
+  for (const part of parts) {
+    if (legacy && part.mirrorOf) {
+      // Old 64x32 skins have no left limbs: Minecraft mirrors the right ones.
+      ctx.save();
+      ctx.translate(part.dx + part.w, part.dy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(image, part.mirrorOf[0], part.mirrorOf[1], part.w, part.h, 0, 0, part.w, part.h);
+      ctx.restore();
+      continue;
+    }
+    ctx.drawImage(image, part.base[0], part.base[1], part.w, part.h, part.dx, part.dy, part.w, part.h);
+    // Old skins only have the hat layer (top half); the rest of the overlay doesn't exist.
+    if (!legacy || part.overlay[1] < 32) {
+      ctx.drawImage(image, part.overlay[0], part.overlay[1], part.w, part.h, part.dx, part.dy, part.w, part.h);
+    }
+  }
+}
+
+let skinRequestId = 0;
+async function loadSkin() {
+  const requestId = ++skinRequestId;
+  const player = $("player");
+  if (!currentAuth) {
+    player.hidden = true;
+    return;
+  }
+  const skin = await api.getSkin().catch(() => null);
+  if (requestId !== skinRequestId || !skin?.url) return;
+  const image = new Image();
+  // Both skin hosts allow CORS, which lets prepareSkinTexture read the pixels.
+  image.crossOrigin = "anonymous";
+  image.onload = () => {
+    if (requestId !== skinRequestId) return;
+    drawSkin($("playerSkin"), prepareSkinTexture(image), skin.slim);
+    $("playerName").textContent = currentAuth.name;
+    player.hidden = false;
+  };
+  image.src = skin.url;
 }
 
 // Other saved accounts, one click to switch. Names come from Mojang: textContent only.

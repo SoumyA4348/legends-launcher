@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("launcherApi", {
   login: () => ipcRenderer.invoke("launcher:auth-login"),
   logout: () => ipcRenderer.invoke("launcher:auth-logout"),
   listAccounts: () => ipcRenderer.invoke("launcher:accounts-list"),
+  getSkin: () => ipcRenderer.invoke("launcher:skin"),
   switchAccount: (uuid) => ipcRenderer.invoke("launcher:accounts-switch", uuid),
   removeAccount: (uuid) => ipcRenderer.invoke("launcher:accounts-remove", uuid),
   getVersions: () => ipcRenderer.invoke("launcher:versions"),

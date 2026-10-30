@@ -1211,3 +1211,44 @@ input[type="range"] {
   max-width: 420px;
   margin-top: 12px;
 }
+
+/* The player's skin stands on the scene's ground, above the Play button. */
+.player {
+  --skin-scale: 4;
+  position: absolute;
+  right: calc(var(--gutter) + 120px - 8px * var(--skin-scale));
+  bottom: calc(var(--bar-h) - 4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.player-skin {
+  width: calc(16px * var(--skin-scale));
+  height: calc(32px * var(--skin-scale));
+  image-rendering: pixelated;
+}
+
+/* Like an in-game name tag. */
+.player-name {
+  padding: 1px 6px 2px;
+  background: rgba(0, 0, 0, 0.45);
+  font-family: var(--font-pixel);
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+@media (min-height: 860px) {
+  .player {
+    --skin-scale: 5;
+  }
+}
+
+@media (max-width: 1000px) {
+  .player {
+    right: calc(var(--gutter) + 95px - 8px * var(--skin-scale));
+  }
+}

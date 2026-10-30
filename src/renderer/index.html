@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: https://mc-heads.net https://minotar.net https://cdn.modrinth.com; connect-src 'none'; object-src 'none'; base-uri 'none'" />
+    content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: https://mc-heads.net https://minotar.net https://cdn.modrinth.com https://textures.minecraft.net; connect-src 'none'; object-src 'none'; base-uri 'none'" />
   <title>Legends Launcher</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -67,6 +67,12 @@
             <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
           </button>
         </div>
+      </div>
+
+      <!-- The signed-in player's skin, standing on the scene's ground above the Play button. -->
+      <div class="player" id="player" hidden>
+        <span class="player-name" id="playerName"></span>
+        <canvas class="player-skin" id="playerSkin" width="16" height="32" aria-hidden="true"></canvas>
       </div>
 
       <div class="bar">
