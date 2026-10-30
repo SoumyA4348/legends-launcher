@@ -12,6 +12,7 @@ const accounts = require("./src/accounts");
 const analytics = require("./src/analytics");
 const skins = require("./src/skin");
 const { buildNewsItems } = require("./src/news");
+const { redactSecrets } = require("./src/redact");
 
 // Public Aptabase app key (it ships inside the app either way); the env var overrides it.
 const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY ?? "A-US-1329639096";
@@ -132,7 +133,8 @@ let pendingLogLines = [];
 let logFlushTimer = null;
 
 function sendStatus(message) {
-  pendingLogLines.push(String(message));
+  // Tokens never reach the console, so a copied log is safe to paste into a public bug report.
+  pendingLogLines.push(redactSecrets(message, [currentMclcUser?.access_token, currentMclcUser?.meta?.refresh]));
   if (logFlushTimer) {
     return;
   }
