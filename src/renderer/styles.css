@@ -1133,3 +1133,33 @@ input[type="range"] {
     animation: none !important;
   }
 }
+
+/* Status line with an optional action (crash report) beside it. */
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.status-row .status-line {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn.compact {
+  padding: 4px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.row-2.even {
+  grid-template-columns: 1fr 1fr;
+}
+
+/* While the game runs, the play button becomes Stop. */
+.play-btn.running:hover:not(:disabled) {
+  background: #4a1f24;
+  box-shadow: inset 0 -6px 0 #33151a;
+  color: var(--redstone);
+}

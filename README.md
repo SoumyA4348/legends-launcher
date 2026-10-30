@@ -16,6 +16,10 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
 - **Add any Modrinth mod**: search Fabric mods for the instance's version from the Mods tab; required dependencies are installed automatically.
 - **Self-repair**: corrupted library/mod jars are detected and re-downloaded; stale mods are cleaned when the version changes.
 - **Fast relaunch**: files that already passed their check are only re-checked when they change, mod updates are looked up once a day, and the game starts offline with your installed mods when Modrinth or Fabric can't be reached.
+- **Stop button and crash reports**: stop the game from the launcher; if Minecraft crashes, the launcher comes back and opens the crash report in one click.
+- **Game options**: window size, fullscreen, and keep the launcher open or minimized while playing. Your own video settings (render distance, VSync, FPS cap) are never overwritten; performance defaults only fill in settings you haven't set.
+- **Playtime** tracked per instance.
+- **Sign-in tokens encrypted** with Windows DPAPI, and only one launcher can run at a time.
 - **Live server status**: MOTD, server icon, player count and ping, using the same Server List Ping protocol as the in-game server list.
 - **Version picker** fed by Mojang's version manifest; **RAM slider** sized to the PC's memory.
 - **Console** with filtering, debug-line hiding, copy and auto-scroll.

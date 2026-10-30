@@ -73,7 +73,10 @@
         <select class="instance-pick" id="homeInstanceSelect" aria-label="Instance"></select>
 
         <div class="bar-middle">
-          <div class="status-line" id="status" role="status" aria-live="polite">Checking your Microsoft account…</div>
+          <div class="status-row">
+            <div class="status-line" id="status" role="status" aria-live="polite">Checking your Microsoft account…</div>
+            <button class="btn compact" id="crashBtn" hidden>Open crash report</button>
+          </div>
           <div class="progress" id="progress" aria-hidden="true">
             <div class="progress-meta"><span id="progressLabel">Preparing…</span><span id="progressValue"></span></div>
             <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
@@ -200,6 +203,34 @@
               <span class="range-value" id="memoryValue">4.0 GB</span>
             </div>
             <div class="field-hint" id="memoryHint"></div>
+          </div>
+
+          <div class="panel">
+            <h3 class="section-title">Game</h3>
+            <div class="field">
+              <span class="field-label">Window size</span>
+              <div class="row-2 even">
+                <input id="gameWidth" type="number" min="640" max="7680" placeholder="Width" aria-label="Window width" />
+                <input id="gameHeight" type="number" min="480" max="4320" placeholder="Height" aria-label="Window height" />
+              </div>
+              <div class="field-hint" id="gameWindowHint">Leave empty for Minecraft's default size.</div>
+            </div>
+
+            <label class="toggle-row field">
+              <span class="toggle-text">
+                <span class="toggle-title">Start in fullscreen</span>
+              </span>
+              <input class="switch" id="gameFullscreen" type="checkbox" />
+            </label>
+
+            <div class="field">
+              <span class="field-label">While Minecraft is running</span>
+              <div class="segmented" role="radiogroup" aria-label="Launcher while playing">
+                <label><input type="radio" name="launcherBehavior" value="keep" checked /><span>Keep launcher open</span></label>
+                <label><input type="radio" name="launcherBehavior" value="minimize" /><span>Minimize launcher</span></label>
+              </div>
+              <div class="field-hint">The launcher comes back when the game closes or crashes.</div>
+            </div>
           </div>
         </div>
       </div>

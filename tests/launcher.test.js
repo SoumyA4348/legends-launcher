@@ -78,7 +78,7 @@ test("isJarCorrupted detects missing, truncated, HTML and valid jars", (t) => {
   assert.equal(launcher.isJarCorrupted(path.join(dir, "missing.jar")), true);
 });
 
-test("forcePerformanceVideoSettings merges required keys and preserves the rest", (t) => {
+test("forcePerformanceVideoSettings fills missing keys and keeps the player's choices", (t) => {
   const dir = makeTempDir(t);
   const optionsPath = path.join(dir, "options.txt");
   fs.writeFileSync(optionsPath, "fov:0.5\nenableVsync:true\nlang:en_us\n");
@@ -88,7 +88,7 @@ test("forcePerformanceVideoSettings merges required keys and preserves the rest"
   const written = fs.readFileSync(optionsPath, "utf8");
   assert.match(written, /^fov:0\.5$/m);
   assert.match(written, /^lang:en_us$/m);
-  assert.match(written, /^enableVsync:false$/m);
+  assert.match(written, /^enableVsync:true$/m);
   assert.match(written, /^maxFps:240$/m);
 
   launcher.forcePerformanceVideoSettings(dir, hooks);
@@ -224,4 +224,35 @@ test("prepareModdedProfile launches from disk when the mod list was checked rece
   assert.ok(hooks.messages.some((m) => /up to date/.test(m)));
   assert.ok(!hooks.messages.some((m) => /Resolving|Installing Fabric/.test(m)), "no network work");
   assert.ok(fs.existsSync(path.join(gameDir, "mods", "sodium.jar")));
+});
+
+test("sanitizeGameWindow keeps valid sizes and drops bad ones", () => {
+  assert.deepEqual(launcher.sanitizeGameWindow({ width: "1920", height: "1080", fullscreen: false }), {
+    width: 1920,
+    height: 1080,
+    fullscreen: false
+  });
+  assert.equal(launcher.sanitizeGameWindow({ width: "", height: "" }), null);
+  assert.equal(launcher.sanitizeGameWindow({ width: "100", height: "1080" }), null);
+  assert.equal(launcher.sanitizeGameWindow(undefined), null);
+  assert.deepEqual(launcher.sanitizeGameWindow({ fullscreen: true }), { fullscreen: true });
+});
+
+test("findLatestCrashReport returns the newest report written since launch", (t) => {
+  const dir = makeTempDir(t);
+  assert.equal(launcher.findLatestCrashReport(dir, 0), null);
+
+  const reports = path.join(dir, "crash-reports");
+  fs.mkdirSync(reports);
+  const old = path.join(reports, "crash-old.txt");
+  const fresh = path.join(reports, "crash-new.txt");
+  fs.writeFileSync(old, "old");
+  fs.writeFileSync(fresh, "new");
+  fs.writeFileSync(path.join(reports, "notes.log"), "x");
+  const now = Date.now();
+  fs.utimesSync(old, new Date(now - 60000), new Date(now - 60000));
+  fs.utimesSync(fresh, new Date(now), new Date(now));
+
+  assert.equal(launcher.findLatestCrashReport(dir, now - 1000), fresh);
+  assert.equal(launcher.findLatestCrashReport(dir, now + 60000), null);
 });

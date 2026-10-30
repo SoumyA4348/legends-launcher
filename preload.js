@@ -9,6 +9,8 @@ function subscribe(channel, callback) {
 
 contextBridge.exposeInMainWorld("launcherApi", {
   start: (config) => ipcRenderer.invoke("launcher:start", config),
+  stop: () => ipcRenderer.invoke("launcher:stop"),
+  openCrashReport: () => ipcRenderer.invoke("launcher:open-crash-report"),
   getAuth: () => ipcRenderer.invoke("launcher:auth-get"),
   login: () => ipcRenderer.invoke("launcher:auth-login"),
   logout: () => ipcRenderer.invoke("launcher:auth-logout"),

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -34,6 +34,23 @@ const DISCORD_SHOW_SERVER = process.env.DISCORD_SHOW_SERVER !== "false";
 // Keep sign-in and settings next to the game data too, so the override is a true clean slate.
 if (process.env.LEGENDS_DATA_DIR) {
   app.setPath("userData", path.join(process.env.LEGENDS_DATA_DIR, "legends-launcher"));
+}
+
+// Two launchers would download into the same files at once: a second start focuses the first.
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => restoreMainWindow());
+}
+
+function restoreMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
 }
 
 const getPresenceState = (serverHost) => presence.getPresenceState(serverHost, DISCORD_SHOW_SERVER);
@@ -328,6 +345,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!hasInstanceLock) {
+    return;
+  }
   createWindow();
 
   app.on("activate", () => {
@@ -367,11 +387,19 @@ function getAuthProfilePath() {
   return path.join(app.getPath("userData"), "auth_profile.json");
 }
 
+// Tokens are encrypted with the OS keystore (DPAPI on Windows) when it is available.
+// Files from older versions are plain JSON; they are read as-is and encrypted on next save.
+const ENCRYPTED_PREFIX = "enc:";
+
 function loadSavedAuthProfile() {
   try {
     const filePath = getAuthProfilePath();
     if (fs.existsSync(filePath)) {
-      const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      let raw = fs.readFileSync(filePath, "utf8");
+      if (raw.startsWith(ENCRYPTED_PREFIX)) {
+        raw = safeStorage.decryptString(Buffer.from(raw.slice(ENCRYPTED_PREFIX.length), "base64"));
+      }
+      const data = JSON.parse(raw);
       if (data && data.access_token && data.name) {
         return data;
       }
@@ -386,7 +414,11 @@ function saveAuthProfile(authObj) {
   try {
     const filePath = getAuthProfilePath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(authObj, null, 2), "utf8");
+    const json = JSON.stringify(authObj);
+    const contents = safeStorage.isEncryptionAvailable()
+      ? ENCRYPTED_PREFIX + safeStorage.encryptString(json).toString("base64")
+      : json;
+    fs.writeFileSync(filePath, contents, "utf8");
   } catch (err) {
     console.error("[Auth] Error saving auth profile:", err.message);
   }
@@ -472,7 +504,8 @@ function loginWithMicrosoft(parentWindow) {
       backgroundColor: "#0e1330",
       webPreferences: {
         nodeIntegration: false,
-        contextIsolation: true
+        contextIsolation: true,
+        sandbox: true
       }
     });
 
@@ -662,6 +695,33 @@ ipcMain.handle("launcher:instance-delete", async (_event, instanceId, name) => {
   return { ok: true };
 });
 
+// Only the report found by the last crash can be opened: the renderer never supplies a path.
+let lastCrashReport = null;
+let stopRequested = false;
+
+ipcMain.handle("launcher:open-crash-report", async () => {
+  if (!lastCrashReport || !fs.existsSync(lastCrashReport)) {
+    return { ok: false, message: "No crash report was written." };
+  }
+  const error = await shell.openPath(lastCrashReport);
+  return { ok: !error, message: error };
+});
+
+ipcMain.handle("launcher:stop", () => {
+  const child = activeLauncher?.process;
+  if (!child || child.exitCode !== null) {
+    return { ok: false, message: "Minecraft isn't running." };
+  }
+  stopRequested = true;
+  // taskkill /T also ends child processes; a plain kill can leave the game window open.
+  if (process.platform === "win32") {
+    execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+  } else {
+    child.kill();
+  }
+  return { ok: true };
+});
+
 ipcMain.handle("launcher:install-update", () => {
   if (autoUpdater) {
     autoUpdater.quitAndInstall();
@@ -721,6 +781,8 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     ? getPresenceState(enforcedConfig.serverHost)
     : "Main Menu";
   let isInGame = false;
+  let minimizedForGame = false;
+  const minimizeWhilePlaying = launchConfig?.launcherBehavior === "minimize";
   const presenceFor = (smallImageKey, smallImageText) =>
     setDiscordPresence({ state: `${launchVersion} | ${currentPresenceState}`, smallImageKey, smallImageText });
 
@@ -730,6 +792,10 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     clearInGameFallbackTimer();
     sendPhase("running", "Minecraft is running.");
     presenceFor("play_icon", "In game");
+    if (minimizeWhilePlaying && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
+      mainWindow.minimize();
+      minimizedForGame = true;
+    }
   };
 
   const PRESENCE_BY_STAGE = {
@@ -745,6 +811,8 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
   let launchFailed = false;
 
   clearInGameFallbackTimer();
+  stopRequested = false;
+  lastCrashReport = null;
   sendPhase("preparing", "Starting launch sequence...");
   presenceFor("play_icon", "Starting");
 
@@ -781,18 +849,32 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
           return;
         }
 
-        if (message.startsWith("Launch error:")) {
+        // A game stopped from the launcher exits non-zero; that's not a crash.
+        if (message.startsWith("Launch error:") && !stopRequested) {
           launchFailed = true;
           clearInGameFallbackTimer();
           sendPhase("error", message.slice("Launch error:".length).trim());
           presenceFor("minecraft_icon", "Check launcher logs");
         }
       },
-      onExit: () => {
+      onExit: ({ crashReport } = {}) => {
         clearInGameFallbackTimer();
         activeLauncher = null;
-        if (!launchFailed) {
+        if (stopRequested) {
+          sendPhase("idle", "Minecraft stopped.");
+        } else if (!launchFailed) {
           sendPhase("idle", "Minecraft closed. Ready to launch again.");
+        } else if (crashReport) {
+          lastCrashReport = crashReport;
+          sendToRenderer("launcher:phase", {
+            phase: "error",
+            message: "Minecraft crashed. Open the crash report to see why.",
+            crashReport: true
+          });
+        }
+        // Bring the launcher back after a crash, or when it was minimized for the game.
+        if (minimizedForGame || launchFailed) {
+          restoreMainWindow();
         }
         setDiscordPresence({
           smallImageKey: "minecraft_icon",

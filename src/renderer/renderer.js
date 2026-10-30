@@ -24,6 +24,11 @@ const memoryInput = $("maxMemoryMb");
 const memoryValue = $("memoryValue");
 const memoryHint = $("memoryHint");
 const fpsHudInput = $("installFpsHud");
+const gameWidthInput = $("gameWidth");
+const gameHeightInput = $("gameHeight");
+const gameFullscreenInput = $("gameFullscreen");
+const behaviorInputs = [...document.querySelectorAll('input[name="launcherBehavior"]')];
+const crashBtn = $("crashBtn");
 const instanceSelect = $("instanceSelect");
 const homeInstanceSelect = $("homeInstanceSelect");
 const newInstanceRow = $("newInstanceRow");
@@ -48,6 +53,9 @@ let knownVersions = null;
 let activeView = "home";
 let instances = [];
 let selectedInstanceId = "default";
+// Playtime is credited to the instance that was launched, even if the player switches away.
+let runningInstanceId = null;
+let runningSince = 0;
 
 const STAGES = ["java", "loader", "mods", "game", "launching"];
 const STAGE_WEIGHTS = { java: 15, loader: 5, mods: 15, game: 60, launching: 5 };
@@ -126,6 +134,10 @@ function getProfile() {
   return profileInputs.find((input) => input.checked)?.value || "competitive";
 }
 
+function getLauncherBehavior() {
+  return behaviorInputs.find((input) => input.checked)?.value || "keep";
+}
+
 function isLegacyVersion(version) {
   const match = /^1\.(\d+)/.exec(version);
   return Boolean(match) && Number(match[1]) <= 13;
@@ -139,6 +151,8 @@ function normalizeInstance(raw) {
     version: String(raw.version || versionInput.defaultValue),
     launchProfile: raw.launchProfile === "full" ? "full" : "competitive",
     installFpsHud: typeof raw.installFpsHud === "boolean" ? raw.installFpsHud : true,
+    playtimeMs: Number.isFinite(raw.playtimeMs) && raw.playtimeMs > 0 ? raw.playtimeMs : 0,
+    lastPlayed: Number.isFinite(raw.lastPlayed) ? raw.lastPlayed : 0,
     extraMods: extraMods
       .filter((mod) => mod && typeof mod.slug === "string")
       .map((mod) => ({
@@ -163,6 +177,10 @@ function loadSettings() {
   if (saved.serverHost !== undefined) serverHostInput.value = saved.serverHost;
   if (saved.serverPort) serverPortInput.value = saved.serverPort;
   if (saved.maxMemoryMb) memoryInput.value = saved.maxMemoryMb;
+  if (saved.gameWidth) gameWidthInput.value = saved.gameWidth;
+  if (saved.gameHeight) gameHeightInput.value = saved.gameHeight;
+  gameFullscreenInput.checked = saved.gameFullscreen === true;
+  behaviorInputs.forEach((input) => (input.checked = input.value === (saved.launcherBehavior === "minimize" ? "minimize" : "keep")));
 
   // Settings saved before instances existed kept version/profile at the top level:
   // they become the "Default" instance.
@@ -205,6 +223,10 @@ function saveSettings() {
     serverHost: serverHostInput.value.trim(),
     serverPort: serverPortInput.value,
     maxMemoryMb: memoryInput.value,
+    gameWidth: gameWidthInput.value,
+    gameHeight: gameHeightInput.value,
+    gameFullscreen: gameFullscreenInput.checked,
+    launcherBehavior: getLauncherBehavior(),
     selectedInstance: selectedInstanceId,
     instances
   };
@@ -246,6 +268,16 @@ function validateSettings() {
 
   const host = serverHostInput.value.trim();
   if (/\s/.test(host)) errors.serverHost = "Server address can't contain spaces.";
+
+  const width = gameWidthInput.value.trim();
+  const height = gameHeightInput.value.trim();
+  if (width || height) {
+    const w = Number(width);
+    const h = Number(height);
+    if (!Number.isInteger(w) || w < 640 || w > 7680 || !Number.isInteger(h) || h < 480 || h > 4320) {
+      errors.gameWindow = "Enter both: width 640–7680 and height 480–4320.";
+    }
+  }
   return Object.keys(errors).length ? errors : null;
 }
 
@@ -262,6 +294,10 @@ function renderValidation() {
     ? "The game joins this server automatically after loading."
     : "No server set: the game opens to the main menu.");
   serverHint.classList.toggle("error", Boolean(serverError));
+  gameWidthInput.classList.toggle("invalid", Boolean(errors.gameWindow));
+  gameHeightInput.classList.toggle("invalid", Boolean(errors.gameWindow));
+  $("gameWindowHint").textContent = errors.gameWindow || "Leave empty for Minecraft's default size.";
+  $("gameWindowHint").classList.toggle("error", Boolean(errors.gameWindow));
   return errors;
 }
 
@@ -279,7 +315,28 @@ function describeLaunch() {
   const mods = isLegacyVersion(version)
     ? "without mods"
     : `with ${PROFILE_INFO[getProfile()].label} mods${ownMods ? ` and ${ownMods} of your own` : ""}`;
-  return `Minecraft ${version} ${mods}, ${host ? `joining ${host}` : "opening to the main menu"}.`;
+  const sentence = `Minecraft ${version} ${mods}, ${host ? `joining ${host}` : "opening to the main menu"}.`;
+  return instance.playtimeMs >= 60000
+    ? `${sentence} Played ${formatPlaytime(instance.playtimeMs)}, last on ${new Date(instance.lastPlayed).toLocaleDateString()}.`
+    : sentence;
+}
+
+function formatPlaytime(ms) {
+  const minutes = Math.floor(ms / 60000);
+  const hours = Math.floor(minutes / 60);
+  return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+function creditPlaytime() {
+  if (!runningInstanceId) return;
+  const instance = instances.find((i) => i.id === runningInstanceId);
+  if (instance) {
+    instance.playtimeMs += Date.now() - runningSince;
+    instance.lastPlayed = Date.now();
+    saveSettings();
+    renderSummary();
+  }
+  runningInstanceId = null;
 }
 
 function renderSummary() {
@@ -476,8 +533,8 @@ function searchModsIfStale() {
 
 modSearchInput.addEventListener("input", debounce(searchMods, 400));
 
-[versionInput, serverHostInput, serverPortInput, memoryInput].forEach((el) => el.addEventListener("input", onSettingsChanged));
-[fpsHudInput, ...profileInputs].forEach((el) => el.addEventListener("change", onSettingsChanged));
+[versionInput, serverHostInput, serverPortInput, memoryInput, gameWidthInput, gameHeightInput].forEach((el) => el.addEventListener("input", onSettingsChanged));
+[fpsHudInput, gameFullscreenInput, ...profileInputs, ...behaviorInputs].forEach((el) => el.addEventListener("change", onSettingsChanged));
 const refreshServerSoon = debounce(() => refreshServerStatus(), 600);
 serverHostInput.addEventListener("input", refreshServerSoon);
 serverPortInput.addEventListener("input", refreshServerSoon);
@@ -655,10 +712,10 @@ function renderPlayButton() {
     return;
   }
   if (phase === "running") {
-    playBtn.disabled = true;
+    playBtn.disabled = false;
     playBtn.classList.add("running");
-    playLabel.textContent = "Running";
-    playSub.textContent = `Minecraft ${version}`;
+    playLabel.textContent = "Stop";
+    playSub.textContent = `Minecraft ${version} is running`;
     return;
   }
 
@@ -704,8 +761,14 @@ function renderProgress({ stage, label, current, total, unit }) {
   renderPlayButton();
 }
 
-function setPhase(next, message) {
+function setPhase(next, message, crashReport = false) {
+  if (phase === "running" && next !== "running") creditPlaytime();
+  if (next === "running" && phase !== "running") {
+    runningInstanceId = selectedInstanceId;
+    runningSince = Date.now();
+  }
   phase = next;
+  crashBtn.hidden = !(next === "error" && crashReport);
   const showProgress = next === "preparing";
   progressEl.classList.toggle("visible", showProgress);
   progressEl.setAttribute("aria-hidden", String(!showProgress));
@@ -724,12 +787,31 @@ function setPhase(next, message) {
 }
 
 api.onProgress(renderProgress);
-api.onPhase(({ phase: next, message }) => {
+api.onPhase(({ phase: next, message, crashReport }) => {
   // "preparing" is set locally the moment Play is clicked.
-  if (next !== "preparing") setPhase(next, message);
+  if (next !== "preparing") setPhase(next, message, crashReport);
 });
 
+crashBtn.addEventListener("click", async () => {
+  const result = await api.openCrashReport().catch(() => null);
+  if (!result?.ok) toast(result?.message || "Could not open the crash report.", true);
+});
+
+async function stopGame() {
+  playBtn.disabled = true;
+  setStatus("Stopping Minecraft…");
+  const result = await api.stop().catch(() => null);
+  if (!result?.ok) {
+    toast(result?.message || "Could not stop Minecraft.", true);
+    renderPlayButton();
+  }
+}
+
 async function launch() {
+  if (phase === "running") {
+    await stopGame();
+    return;
+  }
   if (!currentAuth) {
     await handleLogin();
     return;
@@ -755,6 +837,12 @@ async function launch() {
     serverPort: serverPortInput.value,
     maxMemoryMb: memoryInput.value,
     instanceId: selectedInstanceId,
+    gameWindow: {
+      width: gameWidthInput.value,
+      height: gameHeightInput.value,
+      fullscreen: gameFullscreenInput.checked
+    },
+    launcherBehavior: getLauncherBehavior(),
     extraMods: currentInstance().extraMods.map(({ slug, name }) => ({ slug, name }))
   };
 

@@ -72,6 +72,39 @@ function sanitizeMemoryMb(value) {
   return parsed;
 }
 
+// Game window size from the renderer; anything unusable falls back to Minecraft's default.
+function sanitizeGameWindow(value) {
+  const fullscreen = parseBoolean(value?.fullscreen, false);
+  const width = Number.parseInt(String(value?.width), 10);
+  const height = Number.parseInt(String(value?.height), 10);
+  const valid = (n, min, max) => Number.isInteger(n) && n >= min && n <= max;
+  if (!valid(width, 640, 7680) || !valid(height, 480, 4320)) {
+    return fullscreen ? { fullscreen: true } : null;
+  }
+  return { width, height, fullscreen };
+}
+
+// Newest crash report Minecraft wrote since `sinceMs`, or null.
+function findLatestCrashReport(gameDir, sinceMs) {
+  const dir = path.join(gameDir, "crash-reports");
+  let latest = null;
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith(".txt")) {
+        continue;
+      }
+      const filePath = path.join(dir, name);
+      const { mtimeMs } = fs.statSync(filePath);
+      if (mtimeMs >= sinceMs && (!latest || mtimeMs > latest.mtimeMs)) {
+        latest = { filePath, mtimeMs };
+      }
+    }
+  } catch (_error) {
+    return null;
+  }
+  return latest ? latest.filePath : null;
+}
+
 const GAME_PROGRESS_LABELS = {
   assets: "Downloading game assets",
   "assets-copy": "Preparing game assets",
@@ -323,9 +356,11 @@ function forcePerformanceVideoSettings(minecraftRoot, hooks) {
     }
   }
 
+  // Defaults only fill keys the game hasn't written yet: a player's own render distance,
+  // VSync or FPS cap must survive the next launch.
   let changed = false;
   for (const [key, value] of Object.entries(requiredSettings)) {
-    if (parsed[key] !== value) {
+    if (!(key in parsed)) {
       parsed[key] = value;
       changed = true;
     }
@@ -823,15 +858,18 @@ async function launchMinecraft(config, hooks) {
   const launcher = new Client();
   let minecraftProcess = null;
   let hasExited = false;
-  const exitOnce = (message) => {
+  const startedAt = Date.now();
+  const exitOnce = (message, code = 0) => {
     if (hasExited) {
       return;
     }
     hasExited = true;
+    // Look for the report before the status line, so the error can link to it.
+    const crashReport = code ? findLatestCrashReport(getInstanceDir(config?.instanceId), startedAt) : null;
     if (message) {
       hooks.onStatus(message);
     }
-    hooks.onExit();
+    hooks.onExit({ code, crashReport });
   };
 
   const auth = config?.auth;
@@ -848,6 +886,7 @@ async function launchMinecraft(config, hooks) {
   const installFpsHud = parseBoolean(config?.installFpsHud, true);
   const launchProfile = normalizeLaunchProfile(config?.launchProfile);
   const extraMods = sanitizeExtraMods(config?.extraMods);
+  const gameWindow = sanitizeGameWindow(config?.gameWindow);
 
   const onProgress = hooks.onProgress || (() => {});
 
@@ -939,6 +978,7 @@ async function launchMinecraft(config, hooks) {
       "-XX:G1HeapRegionSize=16M",
       "-XX:-OmitStackTraceInFastThrow"
     ],
+    ...(gameWindow ? { window: gameWindow } : {}),
     // No server set: open the main menu instead of joining.
     ...(serverHost
       ? { quickPlay: { type: "multiplayer", identifier: `${serverHost}:${serverPort}` } }
@@ -976,7 +1016,8 @@ async function launchMinecraft(config, hooks) {
     exitOnce(
       code
         ? `Launch error: Minecraft exited unexpectedly (code ${code}). Open the console for details.`
-        : "Minecraft closed."
+        : "Minecraft closed.",
+      code || 0
     );
   });
   launcher.on("error", (error) => {
@@ -1031,6 +1072,8 @@ module.exports = {
   isLegacyVersion,
   sanitizePort,
   sanitizeMemoryMb,
+  sanitizeGameWindow,
+  findLatestCrashReport,
   parseBoolean,
   normalizeLaunchProfile,
   mapLimit,
