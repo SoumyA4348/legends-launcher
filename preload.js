@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld("launcherApi", {
   getSystemInfo: () => ipcRenderer.invoke("launcher:system-info"),
   getServerStatus: (host, port) => ipcRenderer.invoke("launcher:server-status", host, port),
   openGameFolder: (instanceId) => ipcRenderer.invoke("launcher:open-game-folder", instanceId),
-  searchMods: (query, version) => ipcRenderer.invoke("launcher:mods-search", query, version),
+  searchMods: (query, version, type) => ipcRenderer.invoke("launcher:mods-search", query, version, type),
   deleteInstance: (instanceId, name) => ipcRenderer.invoke("launcher:instance-delete", instanceId, name),
   installUpdate: () => ipcRenderer.invoke("launcher:install-update"),
   onLog: (callback) => subscribe("launcher:log", callback),

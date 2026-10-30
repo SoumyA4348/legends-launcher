@@ -1206,3 +1206,9 @@ input[type="range"] {
 #addAccountBtn {
   margin-top: 10px;
 }
+
+.content-type {
+  grid-template-columns: repeat(3, 1fr);
+  max-width: 420px;
+  margin-top: 12px;
+}

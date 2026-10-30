@@ -174,8 +174,8 @@ test("sanitizeExtraMods keeps valid Modrinth slugs only", () => {
       { slug: "P7dR8mSH" }
     ]),
     [
-      { projects: ["iris"], name: "Iris Shaders" },
-      { projects: ["P7dR8mSH"], name: "P7dR8mSH" }
+      { projects: ["iris"], name: "Iris Shaders", type: "mod" },
+      { projects: ["P7dR8mSH"], name: "P7dR8mSH", type: "mod" }
     ]
   );
   const many = Array.from({ length: 150 }, (_, i) => ({ slug: `mod-${i}` }));
@@ -267,4 +267,41 @@ test("serverJoinOptions uses Quick Play on 1.20+ and --server on older versions"
   assert.ok(launcher.serverJoinOptions("1.19.4", "h", 1).customLaunchArgs);
   assert.ok(launcher.serverJoinOptions("26.1", "h", 1).quickPlay);
   assert.deepEqual(launcher.serverJoinOptions("1.20.1", "", 25565), {});
+});
+
+test("enableResourcePacks uses file/ on 1.13+ and plain names before", (t) => {
+  const modern = makeTempDir(t);
+  fs.writeFileSync(path.join(modern, "options.txt"), 'fov:0.5\nresourcePacks:["vanilla","file/Old.zip"]\n');
+  launcher.enableResourcePacks(modern, "1.21.4", ["New.zip"]);
+  const modernText = fs.readFileSync(path.join(modern, "options.txt"), "utf8");
+  assert.match(modernText, /^resourcePacks:\["vanilla","file\/Old\.zip","file\/New\.zip"\]$/m);
+  assert.match(modernText, /^fov:0\.5$/m);
+
+  const legacy = makeTempDir(t);
+  launcher.enableResourcePacks(legacy, "1.8.9", ["Faithful.zip"]);
+  assert.match(fs.readFileSync(path.join(legacy, "options.txt"), "utf8"), /^resourcePacks:\["Faithful\.zip"\]$/m);
+});
+
+test("enableShader turns on a new shader but keeps the player's pick", (t) => {
+  const dir = makeTempDir(t);
+  launcher.enableShader(dir, "BSL.zip");
+  const configPath = path.join(dir, "config", "iris.properties");
+  assert.match(fs.readFileSync(configPath, "utf8"), /^shaderPack=BSL\.zip$/m);
+  launcher.enableShader(dir, "Complementary.zip");
+  assert.match(fs.readFileSync(configPath, "utf8"), /^shaderPack=BSL\.zip$/m);
+});
+
+test("ensurePacks removes only packs it installed earlier", async (t) => {
+  const dir = makeTempDir(t);
+  fs.mkdirSync(path.join(dir, "resourcepacks"));
+  fs.writeFileSync(path.join(dir, "resourcepacks", "managed.zip"), "x");
+  fs.writeFileSync(path.join(dir, "resourcepacks", "my-own.zip"), "x");
+  fs.writeFileSync(path.join(dir, ".launcher-managed-packs.json"), JSON.stringify({ resourcepack: ["managed.zip"], shader: [] }));
+  await launcher.ensurePacks("1.20.1", dir, [], silentHooks(), { modded: true });
+  assert.deepEqual(fs.readdirSync(path.join(dir, "resourcepacks")), ["my-own.zip"]);
+});
+
+test("sanitizeExtraMods keeps content type and defaults to mod", () => {
+  const out = launcher.sanitizeExtraMods([{ slug: "sodium" }, { slug: "faithful-32x", type: "resourcepack" }, { slug: "bsl", type: "evil" }]);
+  assert.deepEqual(out.map((m) => m.type), ["mod", "resourcepack", "mod"]);
 });

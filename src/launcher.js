@@ -164,7 +164,9 @@ function getInstanceDir(instanceId) {
 const MODRINTH_SLUG_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
 const MAX_EXTRA_MODS = 100;
 
-// User-added Modrinth mods arrive from the renderer as [{ slug, name }].
+const CONTENT_TYPES = ["mod", "resourcepack", "shader"];
+
+// User-added Modrinth content arrives from the renderer as [{ slug, name, type }].
 function sanitizeExtraMods(value) {
   if (!Array.isArray(value)) {
     return [];
@@ -172,11 +174,21 @@ function sanitizeExtraMods(value) {
   return value
     .filter((mod) => mod && MODRINTH_SLUG_PATTERN.test(String(mod.slug)))
     .slice(0, MAX_EXTRA_MODS)
-    .map((mod) => ({ projects: [String(mod.slug)], name: String(mod.name || mod.slug).slice(0, 80) }));
+    .map((mod) => ({
+      projects: [String(mod.slug)],
+      name: String(mod.name || mod.slug).slice(0, 80),
+      type: CONTENT_TYPES.includes(mod.type) ? mod.type : "mod"
+    }));
 }
 
-async function searchModrinthMods(query, version) {
-  const facets = [["project_type:mod"], ["categories:fabric"]];
+const SEARCH_FACETS = {
+  mod: [["project_type:mod"], ["categories:fabric"]],
+  resourcepack: [["project_type:resourcepack"]],
+  shader: [["project_type:shader"], ["categories:iris"]]
+};
+
+async function searchModrinthMods(query, version, type = "mod") {
+  const facets = [...(SEARCH_FACETS[type] || SEARCH_FACETS.mod)];
   if (version) {
     facets.push([`versions:${version}`]);
   }
@@ -823,6 +835,101 @@ function useVerifiedCacheForMclc(cache) {
 
 // Fabric and Modrinth are asked for updates at most once a day; in between, an unchanged mod
 // list launches straight from disk. If they can't be reached, the installed set is reused.
+// Resource packs work on every version; shaders need Fabric + Iris (added automatically).
+const PACK_TYPES = {
+  resourcepack: { folder: "resourcepacks", loaders: ["minecraft"], label: "resource pack" },
+  shader: { folder: "shaderpacks", loaders: ["iris"], label: "shader" }
+};
+const MANAGED_PACKS_STATE_FILE = ".launcher-managed-packs.json";
+const IRIS_MOD = { projects: ["iris"], name: "Iris Shaders" };
+
+function readManagedPacks(gameDir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(gameDir, MANAGED_PACKS_STATE_FILE), "utf8"));
+    return { resourcepack: Array.isArray(parsed.resourcepack) ? parsed.resourcepack : [], shader: Array.isArray(parsed.shader) ? parsed.shader : [] };
+  } catch (_error) {
+    return { resourcepack: [], shader: [] };
+  }
+}
+
+// options.txt lists enabled packs as a JSON array; 1.13+ prefixes folder packs with "file/".
+function enableResourcePacks(gameDir, version, fileNames) {
+  if (fileNames.length === 0) {
+    return;
+  }
+  const optionsPath = path.join(gameDir, "options.txt");
+  const lines = fs.existsSync(optionsPath) ? fs.readFileSync(optionsPath, "utf8").split(/\r?\n/).filter(Boolean) : [];
+  const index = lines.findIndex((line) => line.startsWith("resourcePacks:"));
+  let enabled = [];
+  try {
+    enabled = index === -1 ? [] : JSON.parse(lines[index].slice("resourcePacks:".length));
+  } catch (_error) {
+    enabled = [];
+  }
+  if (!Array.isArray(enabled)) enabled = [];
+  const prefix = isLegacyVersion(version) && !/^1\.13/.test(version) ? "" : "file/";
+  if (prefix && !enabled.includes("vanilla")) enabled.unshift("vanilla");
+  for (const name of fileNames) {
+    if (!enabled.includes(prefix + name)) enabled.push(prefix + name);
+  }
+  const line = `resourcePacks:${JSON.stringify(enabled)}`;
+  if (index === -1) lines.push(line);
+  else lines[index] = line;
+  fs.writeFileSync(optionsPath, `${lines.join("\n")}\n`, "utf8");
+}
+
+// Turns on a newly added shader, unless the player already picked one in Iris.
+function enableShader(gameDir, fileName) {
+  const configDir = path.join(gameDir, "config");
+  const configPath = path.join(configDir, "iris.properties");
+  const props = {};
+  if (fs.existsSync(configPath)) {
+    for (const line of fs.readFileSync(configPath, "utf8").split(/\r?\n/)) {
+      const at = line.indexOf("=");
+      if (at > 0 && !line.startsWith("#")) props[line.slice(0, at)] = line.slice(at + 1);
+    }
+  }
+  if (props.shaderPack) {
+    return;
+  }
+  props.shaderPack = fileName;
+  props.enableShaders = "true";
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(configPath, `${Object.entries(props).map(([k, v]) => `${k}=${v}`).join("\n")}\n`, "utf8");
+}
+
+// Installs the player's resource packs and shaders. Only files this launcher installed are
+// ever removed; packs the player dropped in by hand are left alone.
+async function ensurePacks(version, gameDir, packs, hooks, { modded }) {
+  const previous = readManagedPacks(gameDir);
+  const next = { resourcepack: [], shader: [] };
+  for (const [type, spec] of Object.entries(PACK_TYPES)) {
+    const wanted = packs.filter((pack) => pack.type === type);
+    const dir = path.join(gameDir, spec.folder);
+    if (type === "shader" && wanted.length > 0 && !modded) {
+      hooks.onStatus(`Skipped ${wanted.length} shader(s): shaders need Minecraft 1.16.5 or newer with Fabric.`);
+      wanted.length = 0;
+    }
+    if (wanted.length > 0) {
+      fs.mkdirSync(dir, { recursive: true });
+      const resolved = await mapLimit(wanted, MOD_CONCURRENCY, (pack) => resolveMod(pack, { version, loaders: spec.loaders, hooks }));
+      const installed = await mapLimit(resolved.filter(Boolean), MOD_CONCURRENCY, (entry) => installMod(entry, { modsDir: dir, hooks }));
+      next[type] = installed.filter(Boolean);
+    }
+    for (const fileName of previous[type]) {
+      if (!next[type].includes(fileName)) {
+        fs.rmSync(path.join(dir, path.basename(String(fileName))), { force: true });
+        hooks.onStatus(`Removed ${spec.label} ${fileName}.`);
+      }
+    }
+  }
+  enableResourcePacks(gameDir, version, next.resourcepack.filter((name) => !previous.resourcepack.includes(name)));
+  const newShader = next.shader.find((name) => !previous.shader.includes(name));
+  if (newShader) enableShader(gameDir, newShader);
+  fs.writeFileSync(path.join(gameDir, MANAGED_PACKS_STATE_FILE), JSON.stringify(next), "utf8");
+  return next;
+}
+
 const MOD_RECHECK_MS = 24 * 60 * 60 * 1000;
 
 async function prepareModdedProfile(version, minecraftRoot, gameDir, mods, hooks) {
@@ -903,7 +1010,9 @@ async function launchMinecraft(config, hooks) {
   const installParkourPack = parseBoolean(config?.installParkourPack, true);
   const installFpsHud = parseBoolean(config?.installFpsHud, true);
   const launchProfile = normalizeLaunchProfile(config?.launchProfile);
-  const extraMods = sanitizeExtraMods(config?.extraMods);
+  const extraContent = sanitizeExtraMods(config?.extraMods);
+  const extraMods = extraContent.filter((item) => item.type === "mod");
+  const packs = extraContent.filter((item) => item.type !== "mod");
   const gameWindow = sanitizeGameWindow(config?.gameWindow);
 
   const onProgress = hooks.onProgress || (() => {});
@@ -934,6 +1043,9 @@ async function launchMinecraft(config, hooks) {
     mergedMods.push(...FPS_HUD_MODS);
   }
   mergedMods.push(...extraMods);
+  if (packs.some((pack) => pack.type === "shader")) {
+    mergedMods.push(IRIS_MOD);
+  }
 
   if (legacy) {
     // Legacy Minecraft (< 1.14) has no compatible Fabric performance mods, and
@@ -980,6 +1092,13 @@ async function launchMinecraft(config, hooks) {
   } else {
     pruneManagedMods(gameDir, [], hooks);
     writeManagedModsState(gameDir, { mcVersion: version, fabricVersion: null, files: [] });
+  }
+
+  // Packs never block a launch: offline, the game starts with what's already installed.
+  try {
+    await ensurePacks(version, gameDir, packs, hooks, { modded: Boolean(launchVersion.custom) });
+  } catch (error) {
+    hooks.onStatus(`Couldn't update resource packs or shaders (${error.message}). Launching anyway.`);
   }
 
   forcePerformanceVideoSettings(gameDir, hooks);
@@ -1101,6 +1220,9 @@ module.exports = {
   sanitizeGameWindow,
   serverJoinOptions,
   findLatestCrashReport,
+  ensurePacks,
+  enableResourcePacks,
+  enableShader,
   parseBoolean,
   normalizeLaunchProfile,
   mapLimit,

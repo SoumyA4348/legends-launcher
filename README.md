@@ -18,6 +18,7 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
 - **Fast relaunch**: files that already passed their check are only re-checked when they change, mod updates are looked up once a day, and the game starts offline with your installed mods when Modrinth or Fabric can't be reached.
 - **Stop button and crash reports**: stop the game from the launcher; if Minecraft crashes, the launcher comes back and opens the crash report in one click.
 - **Game options**: window size, fullscreen, and keep the launcher open or minimized while playing. Your own video settings (render distance, VSync, FPS cap) are never overwritten; performance defaults only fill in settings you haven't set.
+- **Resource packs and shaders** from Modrinth, per instance: packs turn on automatically after install, and adding a shader installs Iris for you. Packs you add by hand are never touched.
 - **Multiple accounts**: save up to 10 Microsoft accounts and switch between them in one click.
 - **Playtime** tracked per instance.
 - **Sign-in tokens encrypted** with Windows DPAPI, and only one launcher can run at a time.

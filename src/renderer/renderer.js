@@ -61,6 +61,13 @@ const STAGES = ["java", "loader", "mods", "game", "launching"];
 const STAGE_WEIGHTS = { java: 15, loader: 5, mods: 15, game: 60, launching: 5 };
 let overallProgress = 0;
 
+// What each Mods-page tab adds. Resource packs work on every version; shaders need Fabric.
+const CONTENT_INFO = {
+  mod: { plural: "mods", title: "mods", empty: "Nothing added yet. Find a mod on the right and press Add.", search: "Fabric mods" },
+  resourcepack: { plural: "resource packs", title: "resource packs", empty: "No resource packs yet. They turn on automatically after install.", search: "Resource packs" },
+  shader: { plural: "shaders", title: "shaders", empty: "No shaders yet. Iris is installed for you when you add one.", search: "Shaders" }
+};
+
 const PROFILE_INFO = {
   competitive: { label: "Competitive", hint: "Performance mods only: Sodium, Lithium, FerriteCore, Entity Culling, ImmediatelyFast." },
   full: { label: "Full", hint: "Performance mods plus utilities: Mod Menu, Zoomify, Sodium Extra, Reese's Sodium Options." }
@@ -158,6 +165,7 @@ function normalizeInstance(raw) {
       .map((mod) => ({
         slug: mod.slug,
         name: String(mod.name || mod.slug),
+        type: CONTENT_INFO[mod.type] ? mod.type : "mod",
         iconUrl: String(mod.iconUrl || "").startsWith("https://cdn.modrinth.com/") ? mod.iconUrl : ""
       }))
   };
@@ -311,11 +319,13 @@ function describeLaunch() {
   const instance = currentInstance();
   const version = versionInput.value.trim() || "?";
   const host = serverHostInput.value.trim();
-  const ownMods = instance.extraMods.length;
+  const ownMods = instance.extraMods.filter((mod) => mod.type === "mod").length;
+  const ownPacks = instance.extraMods.length - ownMods;
   const mods = isLegacyVersion(version)
     ? "without mods"
     : `with ${PROFILE_INFO[getProfile()].label} mods${ownMods ? ` and ${ownMods} of your own` : ""}`;
-  const sentence = `Minecraft ${version} ${mods}, ${host ? `joining ${host}` : "opening to the main menu"}.`;
+  const packsNote = ownPacks ? `, ${ownPacks} pack${ownPacks === 1 ? "" : "s"}` : "";
+  const sentence = `Minecraft ${version} ${mods}${packsNote}, ${host ? `joining ${host}` : "opening to the main menu"}.`;
   return instance.playtimeMs >= 60000
     ? `${sentence} Played ${formatPlaytime(instance.playtimeMs)}, last on ${new Date(instance.lastPlayed).toLocaleDateString()}.`
     : sentence;
@@ -419,6 +429,8 @@ $("deleteInstanceBtn").addEventListener("click", async () => {
 
 // ---------- Mods ----------
 const MAX_EXTRA_MODS = 100;
+const contentTypeInputs = [...document.querySelectorAll('input[name="contentType"]')];
+let contentType = "mod";
 let modHits = [];
 let modSearchId = 0;
 let profileSlugs = { competitive: [], full: [], fpsHud: [] };
@@ -472,7 +484,11 @@ function onModsChanged() {
 
 function renderMyMods() {
   const instance = currentInstance();
-  const rows = instance.extraMods.map((mod) =>
+  const info = CONTENT_INFO[contentType];
+  $("myModsTitle").textContent = `Your ${info.title}`;
+  $("findModsTitle").textContent = `Find ${info.title}`;
+  $("myModsEmpty").textContent = info.empty;
+  const rows = instance.extraMods.filter((mod) => mod.type === contentType).map((mod) =>
     modRow({ name: mod.name, iconUrl: mod.iconUrl, meta: mod.slug }, makeButton("Remove", () => {
       instance.extraMods = instance.extraMods.filter((m) => m.slug !== mod.slug);
       onModsChanged();
@@ -482,17 +498,19 @@ function renderMyMods() {
   $("myModsEmpty").hidden = rows.length > 0;
   $("modsSub").textContent = `Extra Modrinth mods for the "${instance.name}" instance. They install on top of the ${PROFILE_INFO[instance.launchProfile].label} profile on your next launch.`;
   const notice = $("modsNotice");
-  notice.hidden = !isLegacyVersion(instance.version);
-  notice.textContent = `Minecraft ${instance.version} has no Fabric mods. Switch this instance to 1.14 or newer to use them.`;
+  notice.hidden = contentType === "resourcepack" || !isLegacyVersion(instance.version);
+  notice.textContent = contentType === "shader"
+    ? `Shaders need Fabric. Switch this instance to 1.16.5 or newer to use them.`
+    : `Minecraft ${instance.version} has no Fabric mods. Switch this instance to 1.14 or newer to use them.`;
 }
 
 function renderModResults() {
   const instance = currentInstance();
   const added = new Set(instance.extraMods.map((mod) => mod.slug));
-  const included = new Set([
+  const included = new Set(contentType === "mod" ? [
     ...profileSlugs[instance.launchProfile],
     ...(instance.installFpsHud ? profileSlugs.fpsHud : [])
-  ]);
+  ] : []);
   modResultsEl.replaceChildren(
     ...modHits.map((hit) => {
       const isIncluded = included.has(hit.slug);
@@ -502,7 +520,7 @@ function renderModResults() {
           toast(`An instance can hold up to ${MAX_EXTRA_MODS} extra mods.`, true);
           return;
         }
-        instance.extraMods.push({ slug: hit.slug, name: hit.name, iconUrl: hit.iconUrl });
+        instance.extraMods.push({ slug: hit.slug, name: hit.name, iconUrl: hit.iconUrl, type: contentType });
         onModsChanged();
         toast(`${hit.name} will install on your next launch.`);
       });
@@ -516,20 +534,32 @@ async function searchMods() {
   const query = modSearchInput.value.trim();
   const version = versionInput.value.trim();
   const requestId = ++modSearchId;
-  lastModSearchKey = `${query}|${version}`;
+  const label = CONTENT_INFO[contentType].search;
+  lastModSearchKey = `${query}|${version}|${contentType}`;
   modSearchHint.textContent = "Searching…";
-  const result = await api.searchMods(query, version).catch(() => null);
+  const result = await api.searchMods(query, version, contentType).catch(() => null);
   if (requestId !== modSearchId) return; // a newer search superseded this one
   modHits = result?.ok ? result.hits : [];
   if (!result?.ok) modSearchHint.textContent = result?.message || "Search failed.";
-  else if (!modHits.length) modSearchHint.textContent = `No Fabric mods for ${version} match "${query}".`;
-  else modSearchHint.textContent = query ? `Fabric mods for Minecraft ${version}` : `Popular Fabric mods for Minecraft ${version}`;
+  else if (!modHits.length) modSearchHint.textContent = `No ${label.toLowerCase()} for ${version} match "${query}".`;
+  else modSearchHint.textContent = query ? `${label} for Minecraft ${version}` : `Popular ${label.toLowerCase()} for Minecraft ${version}`;
   renderModResults();
 }
 
 function searchModsIfStale() {
-  if (lastModSearchKey !== `${modSearchInput.value.trim()}|${versionInput.value.trim()}`) searchMods();
+  if (lastModSearchKey !== `${modSearchInput.value.trim()}|${versionInput.value.trim()}|${contentType}`) searchMods();
 }
+
+contentTypeInputs.forEach((input) =>
+  input.addEventListener("change", () => {
+    contentType = input.value;
+    modSearchInput.placeholder = `Search Modrinth ${CONTENT_INFO[contentType].plural}`;
+    modHits = [];
+    renderMyMods();
+    renderModResults();
+    searchModsIfStale();
+  })
+);
 
 modSearchInput.addEventListener("input", debounce(searchMods, 400));
 
@@ -889,7 +919,7 @@ async function launch() {
       fullscreen: gameFullscreenInput.checked
     },
     launcherBehavior: getLauncherBehavior(),
-    extraMods: currentInstance().extraMods.map(({ slug, name }) => ({ slug, name }))
+    extraMods: currentInstance().extraMods.map(({ slug, name, type }) => ({ slug, name, type }))
   };
 
   let result;

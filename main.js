@@ -707,11 +707,12 @@ ipcMain.handle("launcher:open-game-folder", async (_event, instanceId) => {
   }
 });
 
-ipcMain.handle("launcher:mods-search", async (_event, query, version) => {
+ipcMain.handle("launcher:mods-search", async (_event, query, version, type) => {
   const cleanQuery = String(query || "").trim().slice(0, 100);
   const cleanVersion = /^[\w.-]{1,32}$/.test(String(version || "")) ? String(version) : "";
+  const cleanType = ["mod", "resourcepack", "shader"].includes(type) ? type : "mod";
   try {
-    return { ok: true, hits: await searchModrinthMods(cleanQuery, cleanVersion) };
+    return { ok: true, hits: await searchModrinthMods(cleanQuery, cleanVersion, cleanType) };
   } catch (_error) {
     return { ok: false, hits: [], message: "Could not reach Modrinth. Check your connection." };
   }

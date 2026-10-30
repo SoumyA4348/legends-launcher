@@ -95,18 +95,23 @@
       <div class="page-head">
         <h2 class="page-title">Mods</h2>
         <p class="page-sub" id="modsSub"></p>
+        <div class="segmented content-type" role="radiogroup" aria-label="Content type">
+          <label><input type="radio" name="contentType" value="mod" checked /><span>Mods</span></label>
+          <label><input type="radio" name="contentType" value="resourcepack" /><span>Resource packs</span></label>
+          <label><input type="radio" name="contentType" value="shader" /><span>Shaders</span></label>
+        </div>
       </div>
 
       <div class="columns mods-columns">
         <div class="panel">
-          <h3 class="section-title">Your mods</h3>
+          <h3 class="section-title" id="myModsTitle">Your mods</h3>
           <div class="field-hint warn" id="modsNotice" hidden></div>
           <ul class="mod-list" id="myMods"></ul>
           <div class="mod-empty" id="myModsEmpty">Nothing added yet. Find a mod on the right and press Add.</div>
         </div>
 
         <div class="panel">
-          <h3 class="section-title">Find mods</h3>
+          <h3 class="section-title" id="findModsTitle">Find mods</h3>
           <input id="modSearch" type="text" placeholder="Search Modrinth" spellcheck="false" />
           <div class="field-hint" id="modSearchHint"></div>
           <ul class="mod-list" id="modResults"></ul>
