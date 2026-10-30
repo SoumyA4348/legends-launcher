@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Legends Launcher isn't working
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Legends Launcher! A few details help fix this quickly.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+      placeholder: I pressed Play and the game closed right after the loading screen.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the launcher
+        2. Set Minecraft 1.21.4 with the Full mod profile
+        3. Press Play
+  - type: input
+    id: launcher-version
+    attributes:
+      label: Launcher version
+      description: Shown next to the logo, top left (for example v0.1.0).
+    validations:
+      required: true
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version and mod profile
+      placeholder: 1.21.4, Competitive
+    validations:
+      required: true
+  - type: dropdown
+    id: windows
+    attributes:
+      label: Windows version
+      options:
+        - Windows 11
+        - Windows 10
+        - Other
+  - type: textarea
+    id: console
+    attributes:
+      label: Console log
+      description: Open the Console tab, press Copy and paste it here. Sign-in tokens are hidden automatically.
+      render: shell
+  - type: textarea
+    id: crash-report
+    attributes:
+      label: Crash report
+      description: If Minecraft crashed, press "Open crash report" in the launcher and paste the file here.
+      render: shell
