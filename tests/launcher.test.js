@@ -256,3 +256,15 @@ test("findLatestCrashReport returns the newest report written since launch", (t)
   assert.equal(launcher.findLatestCrashReport(dir, now - 1000), fresh);
   assert.equal(launcher.findLatestCrashReport(dir, now + 60000), null);
 });
+
+test("serverJoinOptions uses Quick Play on 1.20+ and --server on older versions", () => {
+  assert.deepEqual(launcher.serverJoinOptions("1.21.4", "mc.example.com", 25565), {
+    quickPlay: { type: "multiplayer", identifier: "mc.example.com:25565" }
+  });
+  assert.deepEqual(launcher.serverJoinOptions("1.8.9", "mc.example.com", 25566), {
+    customLaunchArgs: ["--server", "mc.example.com", "--port", "25566"]
+  });
+  assert.ok(launcher.serverJoinOptions("1.19.4", "h", 1).customLaunchArgs);
+  assert.ok(launcher.serverJoinOptions("26.1", "h", 1).quickPlay);
+  assert.deepEqual(launcher.serverJoinOptions("1.20.1", "", 25565), {});
+});

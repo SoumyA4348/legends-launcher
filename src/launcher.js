@@ -84,6 +84,22 @@ function sanitizeGameWindow(value) {
   return { width, height, fullscreen };
 }
 
+// Quick Play arrived in 1.20 (and replaced --server); older versions silently ignore it,
+// so they get the old --server/--port flags instead. Year-style versions (26.1+) are modern.
+function supportsQuickPlay(version) {
+  const match = /^1\.(\d+)/.exec(String(version));
+  return !match || Number(match[1]) >= 20;
+}
+
+function serverJoinOptions(version, host, port) {
+  if (!host) {
+    return {};
+  }
+  return supportsQuickPlay(version)
+    ? { quickPlay: { type: "multiplayer", identifier: `${host}:${port}` } }
+    : { customLaunchArgs: ["--server", host, "--port", String(port)] };
+}
+
 // Newest crash report Minecraft wrote since `sinceMs`, or null.
 function findLatestCrashReport(gameDir, sinceMs) {
   const dir = path.join(gameDir, "crash-reports");
@@ -385,7 +401,9 @@ async function ensureFabricProfile(version, minecraftRoot, hooks) {
 
   const loaderList = await fetchJson(`${baseUrl}/v2/versions/loader/${version}`);
   if (!Array.isArray(loaderList) || loaderList.length === 0) {
-    throw new Error(`No Fabric loader found for Minecraft ${version}.`);
+    const error = new Error(`No Fabric loader found for Minecraft ${version}.`);
+    error.code = "NO_FABRIC";
+    throw error;
   }
 
   const loaderVersion = loaderList[0].loader?.version;
@@ -845,7 +863,7 @@ async function prepareModdedProfile(version, minecraftRoot, gameDir, mods, hooks
     writeManagedModsState(gameDir, { mcVersion: version, fabricVersion, files, modsKey, resolvedAt: Date.now() });
     return fabricProfile;
   } catch (error) {
-    if (!cacheUsable) {
+    if (!cacheUsable || error.code === "NO_FABRIC") {
       throw error;
     }
     hooks.onStatus(`Couldn't check for mod updates (${error.message}). Launching with your installed mods.`);
@@ -945,9 +963,19 @@ async function launchMinecraft(config, hooks) {
       uniqueMods.push(mod);
     }
 
-    launchVersion.custom = await prepareModdedProfile(version, minecraftRoot, gameDir, uniqueMods, hooks);
-    if (installFpsHud) {
-      hooks.onStatus("FPS overlay installed.");
+    try {
+      launchVersion.custom = await prepareModdedProfile(version, minecraftRoot, gameDir, uniqueMods, hooks);
+      if (installFpsHud) {
+        hooks.onStatus("FPS overlay installed.");
+      }
+    } catch (error) {
+      // A brand-new release can land before Fabric supports it: play vanilla instead of failing.
+      if (error.code !== "NO_FABRIC") {
+        throw error;
+      }
+      hooks.onStatus(`Fabric doesn't support Minecraft ${version} yet — launching vanilla without mods.`);
+      pruneManagedMods(gameDir, [], hooks);
+      writeManagedModsState(gameDir, { mcVersion: version, fabricVersion: null, files: [] });
     }
   } else {
     pruneManagedMods(gameDir, [], hooks);
@@ -980,9 +1008,7 @@ async function launchMinecraft(config, hooks) {
     ],
     ...(gameWindow ? { window: gameWindow } : {}),
     // No server set: open the main menu instead of joining.
-    ...(serverHost
-      ? { quickPlay: { type: "multiplayer", identifier: `${serverHost}:${serverPort}` } }
-      : {}),
+    ...serverJoinOptions(version, serverHost, serverPort),
     overrides: {
       detached: false,
       // MCLC's default of 2 connections makes a first install crawl through ~4,000 asset files.
@@ -1073,6 +1099,7 @@ module.exports = {
   sanitizePort,
   sanitizeMemoryMb,
   sanitizeGameWindow,
+  serverJoinOptions,
   findLatestCrashReport,
   parseBoolean,
   normalizeLaunchProfile,
