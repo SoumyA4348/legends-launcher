@@ -11,7 +11,7 @@
   --sky: #0e1330;
   --horizon: #3b4a7a;
   --ground: #0b1424;
-  --panel: rgba(14, 19, 48, 0.78);
+  --panel: rgba(14, 19, 48, 0.88);
   --panel-solid: #121839;
   --field: #0a1022;
   --line: rgba(238, 240, 255, 0.09);
@@ -655,7 +655,6 @@ select option {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 22px 24px;
-  backdrop-filter: blur(6px);
 }
 
 .columns > div > .panel + .panel {

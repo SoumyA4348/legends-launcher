@@ -993,11 +993,18 @@ const MAX_LOG_LINES = 2000;
 const logLines = [];
 let renderPending = false;
 
-function pushLog(message) {
+// One timestamp and one trim per batch: a chatty game prints thousands of lines a second.
+function pushLogs(messages) {
   const timestamp = new Date().toLocaleTimeString();
-  logLines.push({ text: `[${timestamp}] ${message}`, debug: message.startsWith("DEBUG:") });
+  for (const message of messages) {
+    logLines.push({ text: `[${timestamp}] ${message}`, debug: message.startsWith("DEBUG:") });
+  }
   if (logLines.length > MAX_LOG_LINES) logLines.splice(0, logLines.length - MAX_LOG_LINES);
   scheduleLogRender();
+}
+
+function pushLog(message) {
+  pushLogs([message]);
 }
 
 function scheduleLogRender() {
@@ -1021,7 +1028,7 @@ function renderLogs() {
   if (autoScroll.checked) logsEl.scrollTop = logsEl.scrollHeight;
 }
 
-api.onLog((lines) => lines.forEach(pushLog));
+api.onLog(pushLogs);
 logFilter.addEventListener("input", debounce(renderLogs, 120));
 hideDebug.addEventListener("change", renderLogs);
 $("clearLogs").addEventListener("click", () => {

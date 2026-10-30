@@ -67,12 +67,31 @@ if (process.env.LEGENDS_DATA_DIR) {
   app.setPath("userData", path.join(process.env.LEGENDS_DATA_DIR, "legends-launcher"));
 }
 
+// Lightweight by design. The UI is a few mostly static pages, so it renders in software and
+// keeps Chromium's GPU and network helpers inside the main process: two processes instead of
+// four, about a third less RAM, and no graphics memory taken away from Minecraft.
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("in-process-gpu");
+app.commandLine.appendSwitch("enable-features", "NetworkServiceInProcess2");
+
 // Two launchers would download into the same files at once: a second start focuses the first.
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => restoreMainWindow());
+}
+
+// While Minecraft runs, the launcher's own processes drop to below-normal priority so they
+// never compete with the game for CPU time. The game itself keeps normal priority.
+function setLauncherPriority(priority) {
+  for (const { pid } of app.getAppMetrics()) {
+    try {
+      os.setPriority(pid, priority);
+    } catch (_error) {
+      // a helper process may have exited in between
+    }
+  }
 }
 
 function restoreMainWindow() {
@@ -191,8 +210,36 @@ async function setDiscordPresence(overrides = {}) {
   }
 }
 
-let externalGameCheckInterval = null;
+let externalGameCheckTimer = null;
 let lastKnownGameRunning = false;
+const EXTERNAL_GAME_POLL_MS = 15000;
+
+// Shows "In game" for a Minecraft that was already running when Discord connected. Games this
+// launcher starts update presence directly, so an idle launcher spawns no process at all:
+// polling continues only while such an outside game is open, to notice when it closes.
+async function refreshExternalGamePresence() {
+  clearTimeout(externalGameCheckTimer);
+  externalGameCheckTimer = null;
+  if (activeLauncher || !discordReady) {
+    return;
+  }
+  const status = await checkMinecraftRunning();
+  if (status.running && !lastKnownGameRunning) {
+    lastKnownGameRunning = true;
+    const info = extractGameInfoFromCmdline(status.cmdline);
+    await setDiscordPresence({
+      state: `${info.version} | ${info.state}`,
+      smallImageKey: "play_icon",
+      smallImageText: "In game"
+    });
+  } else if (!status.running && lastKnownGameRunning) {
+    lastKnownGameRunning = false;
+    await setDiscordPresence({ smallImageKey: "minecraft_icon", smallImageText: "Minecraft" });
+  }
+  if (status.running) {
+    externalGameCheckTimer = setTimeout(refreshExternalGamePresence, EXTERNAL_GAME_POLL_MS);
+  }
+}
 
 // wmic is removed on recent Windows 11 builds; once it fails, go straight to PowerShell
 // instead of spawning a failing process every poll.
@@ -258,43 +305,9 @@ function initializeDiscordRpc() {
     discordReady = true;
     sendStatus("Discord Rich Presence connected.");
 
-    const status = await checkMinecraftRunning();
-    lastKnownGameRunning = status.running;
-    if (status.running) {
-      const info = extractGameInfoFromCmdline(status.cmdline);
-      await setDiscordPresence({
-        state: `${info.version} | ${info.state}`,
-        smallImageKey: "play_icon",
-        smallImageText: "In game"
-      });
-    } else {
+    await refreshExternalGamePresence();
+    if (!lastKnownGameRunning) {
       await setDiscordPresence();
-    }
-
-    if (!externalGameCheckInterval) {
-      externalGameCheckInterval = setInterval(async () => {
-        if (activeLauncher) {
-          lastKnownGameRunning = true;
-          return;
-        }
-
-        const currentlyRunningStatus = await checkMinecraftRunning();
-        if (!currentlyRunningStatus.running && lastKnownGameRunning) {
-          lastKnownGameRunning = false;
-          await setDiscordPresence({
-            smallImageKey: "minecraft_icon",
-            smallImageText: "Minecraft"
-          });
-        } else if (currentlyRunningStatus.running && !lastKnownGameRunning) {
-          lastKnownGameRunning = true;
-          const info = extractGameInfoFromCmdline(currentlyRunningStatus.cmdline);
-          await setDiscordPresence({
-            state: `${info.version} | ${info.state}`,
-            smallImageKey: "play_icon",
-            smallImageText: "In game"
-          });
-        }
-      }, 5000);
     }
   });
 
@@ -417,10 +430,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", async () => {
-  if (externalGameCheckInterval) {
-    clearInterval(externalGameCheckInterval);
-    externalGameCheckInterval = null;
-  }
+  clearTimeout(externalGameCheckTimer);
+  externalGameCheckTimer = null;
   if (rpcClient) {
     try {
       await rpcClient.clearActivity();
@@ -565,6 +576,13 @@ function loginWithMicrosoft(parentWindow) {
         sandbox: true
       }
     });
+
+    // Only the en-US locale ships (a smaller install), which would also make the sign-in page
+    // English for everyone: ask Microsoft for the player's own Windows languages instead.
+    loginWin.webContents.session.setUserAgent(
+      loginWin.webContents.getUserAgent(),
+      app.getPreferredSystemLanguages().join(",")
+    );
 
     let handled = false;
 
@@ -914,6 +932,7 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
       mainWindow.minimize();
       minimizedForGame = true;
     }
+    setLauncherPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);
   };
 
   const PRESENCE_BY_STAGE = {
@@ -1007,6 +1026,7 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
             crashReport: true
           });
         }
+        setLauncherPriority(os.constants.priority.PRIORITY_NORMAL);
         // Bring the launcher back after a crash, or when it was minimized for the game.
         if (minimizedForGame || launchFailed) {
           restoreMainWindow();

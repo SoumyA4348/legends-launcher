@@ -16,6 +16,10 @@
     "appId": "com.legends.launcher",
     "productName": "Legends Launcher",
     "artifactName": "Legends-Launcher-Setup.${ext}",
+    "electronLanguages": [
+      "en-US"
+    ],
+    "compression": "maximum",
     "files": [
       "main.js",
       "preload.js",

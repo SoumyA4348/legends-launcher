@@ -27,6 +27,7 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
 - **Console** with filtering, debug-line hiding, copy and auto-scroll.
 - **Discord Rich Presence** showing installing / downloading / in-game states.
 - **Auto-update** from GitHub Releases.
+- **Lightweight**: about 230 MB of RAM in two processes and near-zero CPU when idle. It uses no graphics memory, and drops to low priority while you play so it never competes with the game.
 
 ## Requirements
 
