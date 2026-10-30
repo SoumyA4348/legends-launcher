@@ -211,6 +211,8 @@ function applyInstance() {
     select.replaceChildren(...instances.map((i) => new Option(i.name, i.id, false, i.id === selectedInstanceId)));
   }
   $("deleteInstanceBtn").disabled = instance.id === "default";
+  // With a single instance there is nothing to pick on the Play page.
+  homeInstanceSelect.hidden = instances.length < 2;
   scene.setSeed(instance.id);
   renderMyMods();
   renderModResults();
@@ -322,10 +324,10 @@ function describeLaunch() {
   const ownMods = instance.extraMods.filter((mod) => mod.type === "mod").length;
   const ownPacks = instance.extraMods.length - ownMods;
   const mods = isLegacyVersion(version)
-    ? "without mods"
-    : `with ${PROFILE_INFO[getProfile()].label} mods${ownMods ? ` and ${ownMods} of your own` : ""}`;
+    ? "Without mods"
+    : `With ${PROFILE_INFO[getProfile()].label} mods${ownMods ? ` and ${ownMods} of your own` : ""}`;
   const packsNote = ownPacks ? `, ${ownPacks} pack${ownPacks === 1 ? "" : "s"}` : "";
-  const sentence = `Minecraft ${version} ${mods}${packsNote}, ${host ? `joining ${host}` : "opening to the main menu"}.`;
+  const sentence = `${mods}${packsNote}, ${host ? `joining ${host}` : "opening to the main menu"}.`;
   return instance.playtimeMs >= 60000
     ? `${sentence} Played ${formatPlaytime(instance.playtimeMs)}, last on ${new Date(instance.lastPlayed).toLocaleDateString()}.`
     : sentence;
@@ -349,8 +351,11 @@ function creditPlaytime() {
   runningInstanceId = null;
 }
 
+// The headline is what Play starts. The instance name only matters once there are several.
 function renderSummary() {
-  $("heroTitle").textContent = currentInstance().name;
+  $("heroTitle").textContent = `Minecraft ${versionInput.value.trim() || "?"}`;
+  $("heroLabel").textContent = `Instance: ${currentInstance().name}`;
+  $("heroLabel").hidden = instances.length < 2;
   $("heroSub").textContent = describeLaunch();
   profileHint.textContent = PROFILE_INFO[getProfile()].hint;
   memoryValue.textContent = formatMemory(Number(memoryInput.value));

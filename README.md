@@ -21,6 +21,7 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
 - **Resource packs and shaders** from Modrinth, per instance: packs turn on automatically after install, and adding a shader installs Iris for you. Packs you add by hand are never touched.
 - **News** on the Play screen: the latest Java release notes, Java Edition news from Mojang and launcher updates, cached for a few hours so most launches make no extra requests.
 - **Skin preview**: your Minecraft skin stands in the Play screen's scene with a name tag. It is drawn from Mojang's skin servers with the same clean-up rules as the game, including slim arms and old 64x32 skins.
+- **Living pixel-art scene**: a sunny landscape generated for each instance, like a world seed, with drifting clouds, a sailboat on the bay and a lantern tree. It only animates on the Play page and freezes while you play.
 - **Multiple accounts**: save up to 10 Microsoft accounts and switch between them in one click.
 - **Playtime** tracked per instance.
 - **Sign-in tokens encrypted** with Windows DPAPI, and only one launcher can run at a time.

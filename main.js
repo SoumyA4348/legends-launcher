@@ -375,11 +375,11 @@ function createWindow() {
     // Paint the app color immediately and only show once the first frame is ready,
     // so there is no white flash on startup.
     show: false,
-    backgroundColor: "#0e1330",
+    backgroundColor: "#faf8f4",
     titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: "#0e1330",
-      symbolColor: "#eef0ff",
+      color: "#faf8f4",
+      symbolColor: "#262323",
       height: 48
     },
     webPreferences: {
@@ -576,7 +576,7 @@ function loginWithMicrosoft(parentWindow) {
       show: true,
       autoHideMenuBar: true,
       title: "Sign in with Microsoft - Legends Launcher",
-      backgroundColor: "#0e1330",
+      backgroundColor: "#faf8f4",
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
