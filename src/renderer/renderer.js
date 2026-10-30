@@ -960,17 +960,20 @@ $("copyLogs").addEventListener("click", async () => {
 });
 
 // ---------- Updates ----------
-api.onUpdate(({ state, version }) => {
+api.onUpdate(({ state, version, percent }) => {
   const banner = $("updateBanner");
   banner.classList.add("visible");
   if (state === "ready") {
     $("updateText").textContent = `Legends Launcher ${version} is ready to install.`;
     $("updateBtn").hidden = false;
   } else {
-    $("updateText").textContent = `Downloading update ${version}…`;
+    $("updateText").textContent = `Downloading update ${version}${percent ? ` (${percent}%)` : ""}…`;
   }
 });
-$("updateBtn").addEventListener("click", () => api.installUpdate());
+$("updateBtn").addEventListener("click", async () => {
+  const result = await api.installUpdate().catch(() => null);
+  if (result && !result.ok) toast(result.message, true);
+});
 
 // ---------- Boot ----------
 scene.mount($("scene"));

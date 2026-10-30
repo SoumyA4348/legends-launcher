@@ -287,16 +287,34 @@ function initializeAutoUpdates() {
   }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  let pendingVersion = null;
   autoUpdater.on("update-available", (info) => {
-    sendToRenderer("launcher:update", { state: "downloading", version: info.version });
+    pendingVersion = info.version;
+    sendToRenderer("launcher:update", { state: "downloading", version: info.version, percent: 0 });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    sendToRenderer("launcher:update", {
+      state: "downloading",
+      version: pendingVersion,
+      percent: Math.round(progress.percent || 0)
+    });
   });
   autoUpdater.on("update-downloaded", (info) => {
     sendToRenderer("launcher:update", { state: "ready", version: info.version });
   });
   autoUpdater.on("error", (error) => {
-    sendStatus(`Update check failed: ${error.message}`);
+    // Only the first line: the full stack is noise in the console.
+    sendStatus(`Update check failed: ${String(error.message).split("\n")[0]}`);
   });
   autoUpdater.checkForUpdates().catch(() => {});
+  // Players leave the launcher open for hours: look for new releases every few hours too.
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), UPDATE_CHECK_INTERVAL_MS);
+}
+
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+function isGameRunning() {
+  return Boolean(activeLauncher?.process && activeLauncher.process.exitCode === null);
 }
 
 // --- Window ---
@@ -722,10 +740,16 @@ ipcMain.handle("launcher:stop", () => {
   return { ok: true };
 });
 
+// Restarting closes the game with it; the update installs on the next quit instead.
 ipcMain.handle("launcher:install-update", () => {
-  if (autoUpdater) {
-    autoUpdater.quitAndInstall();
+  if (!autoUpdater) {
+    return { ok: false, message: "Updates are only available in the installed launcher." };
   }
+  if (isGameRunning()) {
+    return { ok: false, message: "Close Minecraft first. The update will also install when you quit the launcher." };
+  }
+  autoUpdater.quitAndInstall();
+  return { ok: true };
 });
 
 // --- Launch ---
