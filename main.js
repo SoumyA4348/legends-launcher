@@ -13,8 +13,8 @@ const analytics = require("./src/analytics");
 const skins = require("./src/skin");
 const { buildNewsItems } = require("./src/news");
 
-// Public Aptabase app key (it ships inside the app either way). Empty = stats disabled.
-const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY || "";
+// Public Aptabase app key (it ships inside the app either way); the env var overrides it.
+const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY ?? "A-US-1329639096";
 
 function getAnalyticsSettingsPath() {
   return path.join(app.getPath("userData"), "analytics.json");
