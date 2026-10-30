@@ -8,6 +8,7 @@ const { launchMinecraft, getInstanceDir, getProfileSlugs, searchModrinthMods, fe
 const { listReleaseVersions } = require("./src/java");
 const { pingServer } = require("./src/server-status");
 const presence = require("./src/presence");
+const accounts = require("./src/accounts");
 const { formatVersion, parseConnectedServer } = presence;
 
 let mainWindow = null;
@@ -409,7 +410,7 @@ function getAuthProfilePath() {
 // Files from older versions are plain JSON; they are read as-is and encrypted on next save.
 const ENCRYPTED_PREFIX = "enc:";
 
-function loadSavedAuthProfile() {
+function readAccountStore() {
   try {
     const filePath = getAuthProfilePath();
     if (fs.existsSync(filePath)) {
@@ -417,22 +418,23 @@ function loadSavedAuthProfile() {
       if (raw.startsWith(ENCRYPTED_PREFIX)) {
         raw = safeStorage.decryptString(Buffer.from(raw.slice(ENCRYPTED_PREFIX.length), "base64"));
       }
-      const data = JSON.parse(raw);
-      if (data && data.access_token && data.name) {
-        return data;
-      }
+      return accounts.normalizeStore(JSON.parse(raw));
     }
   } catch (err) {
     console.error("[Auth] Error reading auth profile:", err.message);
   }
-  return null;
+  return accounts.normalizeStore(null);
 }
 
-function saveAuthProfile(authObj) {
+function writeAccountStore(store) {
   try {
     const filePath = getAuthProfilePath();
+    if (!store.active) {
+      fs.rmSync(filePath, { force: true });
+      return;
+    }
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const json = JSON.stringify(authObj);
+    const json = JSON.stringify(store);
     const contents = safeStorage.isEncryptionAvailable()
       ? ENCRYPTED_PREFIX + safeStorage.encryptString(json).toString("base64")
       : json;
@@ -442,15 +444,18 @@ function saveAuthProfile(authObj) {
   }
 }
 
+function loadSavedAuthProfile() {
+  return accounts.activeAccount(readAccountStore());
+}
+
+function saveAuthProfile(authObj) {
+  writeAccountStore(accounts.upsertAccount(readAccountStore(), authObj));
+}
+
+// Signs out the active account only; another saved account becomes active.
 function clearAuthProfile() {
-  try {
-    const filePath = getAuthProfilePath();
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-  } catch (err) {
-    console.error("[Auth] Error clearing auth profile:", err.message);
-  }
+  const store = readAccountStore();
+  writeAccountStore(accounts.removeAccount(store, store.active));
 }
 
 function isExpiringSoon(auth) {
@@ -632,10 +637,38 @@ ipcMain.handle("launcher:auth-login", async () => {
   }
 });
 
+// Signing out drops the active account; the next saved one (if any) takes over.
 ipcMain.handle("launcher:auth-logout", async () => {
-  currentMclcUser = null;
   clearAuthProfile();
-  return { ok: true };
+  currentMclcUser = loadSavedAuthProfile();
+  return { ok: true, profile: currentMclcUser ? { name: currentMclcUser.name, uuid: currentMclcUser.uuid } : null };
+});
+
+ipcMain.handle("launcher:accounts-list", () => accounts.listAccounts(readAccountStore()));
+
+ipcMain.handle("launcher:accounts-switch", (_event, uuid) => {
+  if (isGameRunning()) {
+    return { ok: false, message: "Close Minecraft before switching accounts." };
+  }
+  const store = readAccountStore();
+  if (!store.accounts[uuid]) {
+    return { ok: false, message: "That account isn't saved anymore." };
+  }
+  const next = accounts.switchAccount(store, uuid);
+  writeAccountStore(next);
+  currentMclcUser = accounts.activeAccount(next);
+  return { ok: true, profile: { name: currentMclcUser.name, uuid: currentMclcUser.uuid } };
+});
+
+ipcMain.handle("launcher:accounts-remove", (_event, uuid) => {
+  const store = readAccountStore();
+  if (store.active === uuid && isGameRunning()) {
+    return { ok: false, message: "Close Minecraft before removing the account in use." };
+  }
+  const next = accounts.removeAccount(store, uuid);
+  writeAccountStore(next);
+  currentMclcUser = accounts.activeAccount(next);
+  return { ok: true, profile: currentMclcUser ? { name: currentMclcUser.name, uuid: currentMclcUser.uuid } : null };
 });
 
 // --- UI data ---

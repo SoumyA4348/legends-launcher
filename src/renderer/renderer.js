@@ -616,6 +616,53 @@ function renderAccount() {
     $("accountBtn").setAttribute("aria-label", "Sign in with Microsoft");
     $("accountLabel").textContent = "Sign in";
   }
+  $("addAccountBtn").hidden = !signedIn;
+  renderAccountList();
+}
+
+// Other saved accounts, one click to switch. Names come from Mojang: textContent only.
+async function renderAccountList() {
+  const list = await api.listAccounts().catch(() => []);
+  const rows = list.filter((account) => !account.active).map((account) => {
+    const row = document.createElement("li");
+    row.className = "account-list-row";
+    const avatar = document.createElement("img");
+    avatar.alt = "";
+    avatar.src = avatarUrl(account, 32);
+    const name = document.createElement("span");
+    name.className = "account-list-name";
+    name.textContent = account.name;
+    row.append(
+      avatar,
+      name,
+      makeButton("Switch", () => switchAccount(account.uuid), "compact"),
+      makeButton("Remove", () => removeAccount(account), "compact")
+    );
+    return row;
+  });
+  $("accountList").replaceChildren(...rows);
+}
+
+function applyAccountResult(result, successMessage) {
+  if (!result?.ok) {
+    toast(result?.message || "Something went wrong with that account.", true);
+    return;
+  }
+  currentAuth = result.profile || null;
+  if (successMessage) toast(successMessage);
+  setStatus(currentAuth ? `Playing as ${currentAuth.name}.` : "Signed out. Sign in with Microsoft to play.", currentAuth ? "ok" : "");
+  renderAccount();
+  renderPlayButton();
+}
+
+async function switchAccount(uuid) {
+  const result = await api.switchAccount(uuid).catch(() => null);
+  applyAccountResult(result, result?.profile ? `Switched to ${result.profile.name}.` : "");
+}
+
+async function removeAccount(account) {
+  const result = await api.removeAccount(account.uuid).catch(() => null);
+  applyAccountResult(result, `Removed ${account.name}.`);
 }
 
 async function handleLogin() {
@@ -645,12 +692,10 @@ async function handleLogin() {
 }
 
 async function handleLogout() {
-  await api.logout().catch(() => {});
-  currentAuth = null;
-  pushLog("Signed out.");
-  setStatus("Signed out. Sign in with Microsoft to play.");
-  renderAccount();
-  renderPlayButton();
+  const signedOutName = currentAuth?.name;
+  const result = await api.logout().catch(() => null);
+  pushLog(`Signed out ${signedOutName || ""}.`.replace(" .", "."));
+  applyAccountResult(result || { ok: true, profile: null }, "");
 }
 
 // The saved session is shown at once; if its background refresh fails, sign the player out.
@@ -662,6 +707,7 @@ api.onSignedOut(({ message }) => {
 });
 
 $("authBtn").addEventListener("click", () => (currentAuth ? handleLogout() : handleLogin()));
+$("addAccountBtn").addEventListener("click", handleLogin);
 $("accountBtn").addEventListener("click", () => (currentAuth ? showView("settings") : handleLogin()));
 
 async function checkInitialAuth() {
