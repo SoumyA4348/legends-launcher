@@ -1148,6 +1148,51 @@ $("updateBtn").addEventListener("click", async () => {
   if (result && !result.ok) toast(result.message, true);
 });
 
+// ---------- News ----------
+const NEWS_KIND = { launcher: "Launcher update", release: "Java release", news: "News" };
+
+// Feed text is untrusted: textContent only. Links open in the browser through the main process.
+function newsRow(item) {
+  const link = document.createElement("a");
+  link.className = "news-item";
+  link.href = item.url;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.title = item.text;
+  link.addEventListener("click", () => api.track("news_opened", { kind: item.kind }).catch(() => {}));
+  if (item.image) {
+    const image = document.createElement("img");
+    image.className = "news-image";
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.src = item.image;
+    link.append(image);
+  }
+  const body = document.createElement("div");
+  body.className = "news-body";
+  const meta = document.createElement("div");
+  meta.className = "news-meta";
+  // UTC: the feeds give calendar dates, which local time would shift back a day in the Americas.
+  const date = new Date(item.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  meta.textContent = `${NEWS_KIND[item.kind] || "News"} · ${date}`;
+  const title = document.createElement("div");
+  title.className = "news-title";
+  title.textContent = item.title;
+  body.append(meta, title);
+  link.append(body);
+  const row = document.createElement("li");
+  row.append(link);
+  return row;
+}
+
+async function loadNews() {
+  const result = await api.getNews().catch(() => null);
+  const rows = (Array.isArray(result?.items) ? result.items : []).map(newsRow);
+  $("newsList").replaceChildren(...rows);
+  $("news").hidden = rows.length === 0;
+}
+
 // ---------- Privacy ----------
 // The toggle only shows in builds that have an analytics key.
 async function loadAnalyticsSetting() {
@@ -1174,3 +1219,5 @@ loadSystemInfo();
 loadVersions();
 loadAnalyticsSetting();
 refreshServerStatus();
+// News isn't needed for the first frame.
+setTimeout(loadNews, 1200);

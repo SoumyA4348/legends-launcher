@@ -11,6 +11,7 @@ const presence = require("./src/presence");
 const accounts = require("./src/accounts");
 const analytics = require("./src/analytics");
 const skins = require("./src/skin");
+const { buildNewsItems } = require("./src/news");
 
 // Public Aptabase app key (it ships inside the app either way). Empty = stats disabled.
 const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY || "";
@@ -408,6 +409,11 @@ function createWindow() {
     if (presence.isValidUrl(url)) shell.openExternal(url);
     return { action: "deny" };
   });
+  // The launcher page itself never navigates away, whatever gets clicked.
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    event.preventDefault();
+    if (presence.isValidUrl(url)) shell.openExternal(url);
+  });
   mainWindow.loadFile(path.join(__dirname, "src", "renderer", "index.html"));
 }
 
@@ -700,6 +706,43 @@ ipcMain.handle("launcher:auth-logout", async () => {
 
 ipcMain.handle("launcher:accounts-list", () => accounts.listAccounts(readAccountStore()));
 
+// --- News ---
+// Fetched at most every few hours and kept on disk, so most launches make no news requests
+// and the column still shows offline.
+const NEWS_TTL_MS = 6 * 60 * 60 * 1000;
+
+function getNewsCachePath() {
+  return path.join(app.getPath("userData"), "news-cache.json");
+}
+
+ipcMain.handle("launcher:news", async () => {
+  let cached = null;
+  try {
+    cached = JSON.parse(fs.readFileSync(getNewsCachePath(), "utf8"));
+  } catch (_error) {
+    // no cache yet
+  }
+  if (Array.isArray(cached?.items) && Date.now() - cached.fetchedAt < NEWS_TTL_MS) {
+    return { items: cached.items };
+  }
+  const [news, patchNotes, releases] = await Promise.all([
+    fetchJson("https://launchercontent.mojang.com/v2/news.json").catch(() => null),
+    fetchJson("https://launchercontent.mojang.com/v2/javaPatchNotes.json").catch(() => null),
+    fetchJson("https://api.github.com/repos/SoumyA4348/legends-launcher/releases?per_page=5").catch(() => null)
+  ]);
+  if (!news && !patchNotes) {
+    return { items: Array.isArray(cached?.items) ? cached.items : [] };
+  }
+  const items = buildNewsItems({ news, patchNotes, releases });
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    fs.writeFileSync(getNewsCachePath(), JSON.stringify({ fetchedAt: Date.now(), items }));
+  } catch (_error) {
+    // not fatal: fetched again next time
+  }
+  return { items };
+});
+
 // The active account's skin for the Play page. Looked up once per account per session; a
 // failed lookup (offline) isn't cached, so the next visit tries again.
 const skinCache = new Map();
@@ -747,7 +790,7 @@ ipcMain.handle("launcher:analytics-set", (_event, enabled) => {
 });
 
 // The UI may report only these events; everything else is tracked here in the main process.
-const RENDERER_EVENTS = new Set(["content_added", "instance_created"]);
+const RENDERER_EVENTS = new Set(["content_added", "instance_created", "news_opened"]);
 ipcMain.handle("launcher:analytics-track", (_event, eventName, props) => {
   if (RENDERER_EVENTS.has(eventName)) track(eventName, props);
 });

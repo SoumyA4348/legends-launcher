@@ -15,6 +15,7 @@ const EVENTS = new Set([
   "account_switched",
   "content_added",
   "instance_created",
+  "news_opened",
   "update_installed"
 ]);
 

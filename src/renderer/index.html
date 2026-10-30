@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: https://mc-heads.net https://minotar.net https://cdn.modrinth.com https://textures.minecraft.net; connect-src 'none'; object-src 'none'; base-uri 'none'" />
+    content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: https://mc-heads.net https://minotar.net https://cdn.modrinth.com https://textures.minecraft.net https://launchercontent.mojang.com; connect-src 'none'; object-src 'none'; base-uri 'none'" />
   <title>Legends Launcher</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -46,27 +46,34 @@
 
     <!-- PLAY -->
     <section class="view home active" id="view-home" aria-label="Play">
-      <div class="hero">
-        <h1 class="hero-title" id="heroTitle">Default</h1>
-        <p class="hero-sub" id="heroSub"></p>
+      <div class="home-top">
+        <div class="hero">
+          <h1 class="hero-title" id="heroTitle">Default</h1>
+          <p class="hero-sub" id="heroSub"></p>
 
-        <div class="server" id="serverCard">
-          <img class="server-icon" id="serverIcon" alt="" />
-          <div class="min0">
-            <div class="server-line">
-              <span class="server-host" id="serverHostLabel">No server set</span>
-              <span class="dot" id="serverDot"></span>
-              <span class="server-state" id="serverStateText"></span>
+          <div class="server" id="serverCard">
+            <img class="server-icon" id="serverIcon" alt="" />
+            <div class="min0">
+              <div class="server-line">
+                <span class="server-host" id="serverHostLabel">No server set</span>
+                <span class="dot" id="serverDot"></span>
+                <span class="server-state" id="serverStateText"></span>
+              </div>
+              <div class="server-stats" id="serverStats">
+                <span><b id="serverPlayers">—</b> players</span>
+                <span><b id="serverPing">—</b> ping</span>
+              </div>
             </div>
-            <div class="server-stats" id="serverStats">
-              <span><b id="serverPlayers">—</b> players</span>
-              <span><b id="serverPing">—</b> ping</span>
-            </div>
+            <button class="icon-btn" id="serverRefresh" aria-label="Refresh server status">
+              <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            </button>
           </div>
-          <button class="icon-btn" id="serverRefresh" aria-label="Refresh server status">
-            <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-          </button>
         </div>
+
+        <aside class="news" id="news" aria-label="News" hidden>
+          <h2 class="news-heading">News</h2>
+          <ul class="news-list" id="newsList"></ul>
+        </aside>
       </div>
 
       <!-- The signed-in player's skin, standing on the scene's ground above the Play button. -->
