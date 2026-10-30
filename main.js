@@ -1,10 +1,14 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const { exec } = require("child_process");
-const RPC = require("discord-rpc");
-const msmc = require("msmc");
-const { launchMinecraft } = require("./src/launcher");
+const os = require("os");
+const { exec, execFile } = require("child_process");
+// msmc and discord-rpc are required where first used, so they don't delay the window.
+const { launchMinecraft, getInstanceDir, getProfileSlugs, searchModrinthMods, fetchJson } = require("./src/launcher");
+const { listReleaseVersions } = require("./src/java");
+const { pingServer } = require("./src/server-status");
+const presence = require("./src/presence");
+const { formatVersion, parseConnectedServer } = presence;
 
 let mainWindow = null;
 let activeLauncher = null;
@@ -14,123 +18,27 @@ let lastPresenceSignature = "";
 let inGameFallbackTimer = null;
 const launcherSessionStart = Date.now();
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "1412366181511335948";
-const ENABLE_DISCORD_RPC = true;
-const DISCORD_BUTTON_1_LABEL = process.env.DISCORD_BUTTON_1_LABEL || "Join Discord";
-const DISCORD_BUTTON_1_URL = process.env.DISCORD_BUTTON_1_URL || "";
-const DISCORD_BUTTON_2_LABEL = process.env.DISCORD_BUTTON_2_LABEL || "Download Launcher";
-const DISCORD_BUTTON_2_URL = process.env.DISCORD_BUTTON_2_URL || "";
+const ENABLE_DISCORD_RPC = process.env.DISCORD_RPC !== "false";
+const DISCORD_BUTTONS = [
+  {
+    label: process.env.DISCORD_BUTTON_1_LABEL || "Join Discord",
+    url: process.env.DISCORD_BUTTON_1_URL || ""
+  },
+  {
+    label: process.env.DISCORD_BUTTON_2_LABEL || "Download Launcher",
+    url: process.env.DISCORD_BUTTON_2_URL || ""
+  }
+];
 const DISCORD_SHOW_SERVER = process.env.DISCORD_SHOW_SERVER !== "false";
 
-function isValidUrl(value) {
-  if (!value) {
-    return false; 
-  }
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch (_error) {
-    return false;
-  }
+// Keep sign-in and settings next to the game data too, so the override is a true clean slate.
+if (process.env.LEGENDS_DATA_DIR) {
+  app.setPath("userData", path.join(process.env.LEGENDS_DATA_DIR, "legends-launcher"));
 }
 
-function buildDiscordButtons() {
-  const buttons = [];
-  if (isValidUrl(DISCORD_BUTTON_1_URL)) {
-    buttons.push({
-      label: DISCORD_BUTTON_1_LABEL.slice(0, 32),
-      url: DISCORD_BUTTON_1_URL
-    });
-  }
-  if (isValidUrl(DISCORD_BUTTON_2_URL)) {
-    buttons.push({
-      label: DISCORD_BUTTON_2_LABEL.slice(0, 32),
-      url: DISCORD_BUTTON_2_URL
-    });
-  }
-  return buttons.slice(0, 2);
-}
-
-function formatVersion(version) {
-  const cleaned = String(version || "").trim();
-  return cleaned || "Minecraft";
-}
-
-function isIpv4(value) {
-  const parts = value.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  return parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
-}
-
-function isPrivateOrLocalIpv4(ipv4) {
-  const parts = ipv4.split(".").map((x) => Number(x));
-  if (parts[0] === 10) {
-    return true;
-  }
-  if (parts[0] === 127) {
-    return true;
-  }
-  if (parts[0] === 192 && parts[1] === 168) {
-    return true;
-  }
-  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
-    return true;
-  }
-  if (parts[0] === 169 && parts[1] === 254) {
-    return true;
-  }
-  return false;
-}
-
-function isIpv6Like(value) {
-  return value.includes(":");
-}
-
-function sanitizeServerForPresence(serverHost, serverPort) {
-  const normalizedHost = String(serverHost || "").trim().toLowerCase();
-
-  if (!normalizedHost || normalizedHost === "localhost") {
-    return "Private Server";
-  }
-
-  const isLocalDomain =
-    normalizedHost.endsWith(".local") || normalizedHost.endsWith(".lan") || normalizedHost.endsWith(".home");
-  if (isLocalDomain) {
-    return "Private Server";
-  }
-
-  if (isIpv4(normalizedHost)) {
-    return isPrivateOrLocalIpv4(normalizedHost)
-      ? "Private Server"
-      : "Public Server";
-  }
-
-  if (isIpv6Like(normalizedHost)) {
-    return "Private Server";
-  }
-
-  return normalizedHost;
-}
-
-function getPresenceState(serverHost, serverPort) {
-  if (!DISCORD_SHOW_SERVER) {
-    return "Private Server";
-  }
-  return sanitizeServerForPresence(serverHost, serverPort);
-}
-
-function parseConnectedServer(message) {
-  const match = message.match(/Connecting to\s+([^,\s]+),\s*(\d+)/i);
-  if (!match) {
-    return null;
-  }
-
-  return {
-    host: match[1],
-    port: match[2]
-  };
-}
+const getPresenceState = (serverHost) => presence.getPresenceState(serverHost, DISCORD_SHOW_SERVER);
+const extractGameInfoFromCmdline = (cmdline) =>
+  presence.extractGameInfoFromCmdline(cmdline, DISCORD_SHOW_SERVER);
 
 function clearInGameFallbackTimer() {
   if (inGameFallbackTimer) {
@@ -139,12 +47,68 @@ function clearInGameFallbackTimer() {
   }
 }
 
-function sendStatus(message) {
+// --- Renderer messaging ---
+// The game can print thousands of lines per second. Sending each as its own IPC message
+// floods the renderer, so log lines are batched and progress is throttled.
+
+function sendToRenderer(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
-  mainWindow.webContents.send("launcher:status", message);
+  mainWindow.webContents.send(channel, payload);
 }
+
+const LOG_FLUSH_MS = 100;
+let pendingLogLines = [];
+let logFlushTimer = null;
+
+function sendStatus(message) {
+  pendingLogLines.push(String(message));
+  if (logFlushTimer) {
+    return;
+  }
+  logFlushTimer = setTimeout(() => {
+    logFlushTimer = null;
+    const lines = pendingLogLines;
+    pendingLogLines = [];
+    sendToRenderer("launcher:log", lines);
+  }, LOG_FLUSH_MS);
+}
+
+const PROGRESS_THROTTLE_MS = 80;
+let lastProgress = null;
+let lastProgressSentAt = 0;
+let progressTimer = null;
+
+function sendProgress(progress) {
+  const stageChanged = !lastProgress || lastProgress.stage !== progress.stage;
+  lastProgress = progress;
+  const elapsed = Date.now() - lastProgressSentAt;
+  if (stageChanged || elapsed >= PROGRESS_THROTTLE_MS) {
+    clearTimeout(progressTimer);
+    progressTimer = null;
+    lastProgressSentAt = Date.now();
+    sendToRenderer("launcher:progress", progress);
+    return;
+  }
+  if (!progressTimer) {
+    progressTimer = setTimeout(() => {
+      progressTimer = null;
+      lastProgressSentAt = Date.now();
+      sendToRenderer("launcher:progress", lastProgress);
+    }, PROGRESS_THROTTLE_MS - elapsed);
+  }
+}
+
+// phase: "idle" | "preparing" | "running" | "error"
+function sendPhase(phase, message = "") {
+  if (phase !== "preparing") {
+    lastProgress = null;
+  }
+  sendToRenderer("launcher:phase", { phase, message });
+}
+
+// --- Discord Rich Presence ---
 
 async function setDiscordPresence(overrides = {}) {
   if (!ENABLE_DISCORD_RPC || !rpcClient || !discordReady) {
@@ -161,7 +125,7 @@ async function setDiscordPresence(overrides = {}) {
     ...overrides
   };
 
-  const buttons = buildDiscordButtons();
+  const buttons = presence.buildDiscordButtons(DISCORD_BUTTONS);
   if (buttons.length > 0) {
     payload.buttons = buttons;
   }
@@ -182,19 +146,44 @@ async function setDiscordPresence(overrides = {}) {
 let externalGameCheckInterval = null;
 let lastKnownGameRunning = false;
 
-function checkMinecraftRunning() {
+// wmic is removed on recent Windows 11 builds; once it fails, go straight to PowerShell
+// instead of spawning a failing process every poll.
+let wmicAvailable = true;
+
+function checkMinecraftRunningPowerShell(resolve) {
+  exec("powershell -NoProfile -command \"Get-CimInstance Win32_Process -Filter 'Name=''javaw.exe'' or Name=''java.exe''' | Select-Object -ExpandProperty CommandLine\"", { windowsHide: true }, (err, stdout) => {
+    resolve({ running: !err && (stdout || "").includes(".minecraft"), cmdline: stdout || "" });
+  });
+}
+
+// PowerShell costs ~0.7 s of CPU per call, too much to run every few seconds. tasklist is
+// far cheaper and answers "is any Java running?"; only then is the command line read.
+function anyJavaRunning() {
   return new Promise((resolve) => {
+    execFile("tasklist", ["/FO", "CSV", "/NH"], { windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      resolve(err ? true : /"javaw?\.exe"/i.test(stdout));
+    });
+  });
+}
+
+function checkMinecraftRunning() {
+  return new Promise(async (resolve) => {
     if (process.platform === "win32") {
-      exec('wmic process where "name=\'javaw.exe\' or name=\'java.exe\'" get commandline', (err, stdout) => {
-        if (!err && stdout && stdout.includes(".minecraft")) {
-          resolve({ running: true, cmdline: stdout });
-        } else if (err) {
-          exec("powershell -command \"Get-CimInstance Win32_Process -Filter 'Name=''javaw.exe'' or Name=''java.exe''' | Select-Object -ExpandProperty CommandLine\"", (err2, stdout2) => {
-            resolve({ running: !err2 && (stdout2 || "").includes(".minecraft"), cmdline: stdout2 || "" });
-          });
-        } else {
-          resolve({ running: false, cmdline: "" });
+      if (!(await anyJavaRunning())) {
+        resolve({ running: false, cmdline: "" });
+        return;
+      }
+      if (!wmicAvailable) {
+        checkMinecraftRunningPowerShell(resolve);
+        return;
+      }
+      exec('wmic process where "name=\'javaw.exe\' or name=\'java.exe\'" get commandline', { windowsHide: true }, (err, stdout) => {
+        if (err) {
+          wmicAvailable = false;
+          checkMinecraftRunningPowerShell(resolve);
+          return;
         }
+        resolve({ running: (stdout || "").includes(".minecraft"), cmdline: stdout || "" });
       });
     } else {
       exec("ps -ax -o command", (err, stdout) => {
@@ -204,50 +193,23 @@ function checkMinecraftRunning() {
   });
 }
 
-function extractGameInfoFromCmdline(cmdline) {
-  if (!cmdline) return { version: "Minecraft", state: "Private Server" };
-
-  let version = "Minecraft";
-  let mVersion = cmdline.match(/--version\s+([^\s"']+)/) || cmdline.match(/--version\s+"([^"]+)"/);
-  if (mVersion) version = mVersion[1];
-
-  let host = "";
-  let port = "25565";
-
-  let mQuickPlay = cmdline.match(/--quickPlayMultiplayer\s+([^\s:]+)(?::(\d+))?/);
-  if (mQuickPlay) {
-    host = mQuickPlay[1];
-    if (mQuickPlay[2]) port = mQuickPlay[2];
-  } else {
-    let mServer = cmdline.match(/--server\s+([^\s"']+)/);
-    if (mServer) {
-      host = mServer[1];
-      let mPort = cmdline.match(/--port\s+(\d+)/);
-      if (mPort) port = mPort[1];
-    }
-  }
-
-  return { 
-    version: formatVersion(version), 
-    state: host ? getPresenceState(host, port) : "Private Server" 
-  };
-}
-
 function initializeDiscordRpc() {
+  if (rpcClient) {
+    return;
+  }
   if (!ENABLE_DISCORD_RPC) {
-    sendStatus(
-      "Discord Rich Presence disabled. Set DISCORD_CLIENT_ID env var to enable activity image."
-    );
+    sendStatus("Discord Rich Presence disabled (DISCORD_RPC=false).");
     return;
   }
 
+  const RPC = require("discord-rpc");
   RPC.register(DISCORD_CLIENT_ID);
   rpcClient = new RPC.Client({ transport: "ipc" });
 
   rpcClient.on("ready", async () => {
     discordReady = true;
     sendStatus("Discord Rich Presence connected.");
-    
+
     const status = await checkMinecraftRunning();
     lastKnownGameRunning = status.running;
     if (status.running) {
@@ -264,10 +226,10 @@ function initializeDiscordRpc() {
     if (!externalGameCheckInterval) {
       externalGameCheckInterval = setInterval(async () => {
         if (activeLauncher) {
-          lastKnownGameRunning = true; 
+          lastKnownGameRunning = true;
           return;
         }
-        
+
         const currentlyRunningStatus = await checkMinecraftRunning();
         if (!currentlyRunningStatus.running && lastKnownGameRunning) {
           lastKnownGameRunning = false;
@@ -293,33 +255,80 @@ function initializeDiscordRpc() {
   });
 }
 
+// --- Auto-update (packaged builds only) ---
+
+let autoUpdater = null;
+
+function initializeAutoUpdates() {
+  if (!app.isPackaged) {
+    return;
+  }
+  try {
+    ({ autoUpdater } = require("electron-updater"));
+  } catch (_error) {
+    return;
+  }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("update-available", (info) => {
+    sendToRenderer("launcher:update", { state: "downloading", version: info.version });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    sendToRenderer("launcher:update", { state: "ready", version: info.version });
+  });
+  autoUpdater.on("error", (error) => {
+    sendStatus(`Update check failed: ${error.message}`);
+  });
+  autoUpdater.checkForUpdates().catch(() => {});
+}
+
+// --- Window ---
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 980,
+    width: 1080,
     height: 720,
-    minWidth: 900,
-    minHeight: 650,
+    minWidth: 920,
+    minHeight: 640,
     title: "Legends Launcher",
-    titleBarStyle: 'hidden',
+    // Paint the app color immediately and only show once the first frame is ready,
+    // so there is no white flash on startup.
+    show: false,
+    backgroundColor: "#0e1330",
+    titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: '#050811',
-      symbolColor: '#f8fafc',
-      height: 40
+      color: "#0e1330",
+      symbolColor: "#eef0ff",
+      height: 48
     },
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false
     }
   });
 
   mainWindow.setMenu(null);
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+    // Discord and update checks aren't needed for the first frame: start them once visible.
+    setTimeout(() => {
+      initializeDiscordRpc();
+      initializeAutoUpdates();
+    }, 1500);
+  });
+  // Links opened from the UI go to the default browser, never a new Electron window.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (presence.isValidUrl(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
   mainWindow.loadFile(path.join(__dirname, "src", "renderer", "index.html"));
 }
 
 app.whenReady().then(() => {
   createWindow();
-  initializeDiscordRpc();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -394,15 +403,20 @@ function clearAuthProfile() {
   }
 }
 
+function isExpiringSoon(auth) {
+  return Date.now() >= (auth.meta?.exp || 0) - 5 * 60 * 1000;
+}
+
+// One refresh at a time: the startup background refresh and a Play click share it,
+// instead of spending the same refresh token twice.
+let pendingRefresh = null;
+
 async function ensureValidAuth(savedAuth) {
   if (!savedAuth) {
     return { ok: false, message: "No authentication session." };
   }
 
-  const exp = savedAuth.meta?.exp || 0;
-  const isExpiringSoon = Date.now() >= (exp - 5 * 60 * 1000);
-
-  if (!isExpiringSoon && savedAuth.access_token && savedAuth.name) {
+  if (!isExpiringSoon(savedAuth) && savedAuth.access_token && savedAuth.name) {
     return { ok: true, profile: savedAuth };
   }
 
@@ -412,7 +426,17 @@ async function ensureValidAuth(savedAuth) {
     return { ok: false, message: "Session expired. Please sign in again." };
   }
 
+  if (!pendingRefresh) {
+    pendingRefresh = refreshAuth(refreshToken).finally(() => {
+      pendingRefresh = null;
+    });
+  }
+  return pendingRefresh;
+}
+
+async function refreshAuth(refreshToken) {
   try {
+    const msmc = require("msmc");
     const authManager = new msmc.Auth();
     const xbox = await authManager.refresh(refreshToken);
     const mc = await xbox.getMinecraft();
@@ -432,6 +456,7 @@ async function ensureValidAuth(savedAuth) {
 
 function loginWithMicrosoft(parentWindow) {
   return new Promise((resolve, reject) => {
+    const msmc = require("msmc");
     const authManager = new msmc.Auth("select_account");
     const redirectUri = "https://login.live.com/oauth20_desktop.srf";
     const authUrl = authManager.createLink(redirectUri);
@@ -444,7 +469,7 @@ function loginWithMicrosoft(parentWindow) {
       show: true,
       autoHideMenuBar: true,
       title: "Sign in with Microsoft - Legends Launcher",
-      backgroundColor: "#050811",
+      backgroundColor: "#0e1330",
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true
@@ -519,38 +544,23 @@ function loginWithMicrosoft(parentWindow) {
   });
 }
 
+// Answers from the saved session without waiting on the network, so Play is ready instantly.
+// An expiring token is refreshed in the background; Play re-validates before launching.
 ipcMain.handle("launcher:auth-get", async () => {
-  if (currentMclcUser) {
-    const check = await ensureValidAuth(currentMclcUser);
-    if (check.ok) {
-      currentMclcUser = check.profile;
-      return {
-        authenticated: true,
-        profile: {
-          name: currentMclcUser.name,
-          uuid: currentMclcUser.uuid
-        }
-      };
-    }
+  const session = currentMclcUser || loadSavedAuthProfile();
+  if (!session) {
+    return { authenticated: false };
   }
-
-  const saved = loadSavedAuthProfile();
-  if (saved) {
-    const check = await ensureValidAuth(saved);
-    if (check.ok) {
-      currentMclcUser = check.profile;
-      return {
-        authenticated: true,
-        profile: {
-          name: currentMclcUser.name,
-          uuid: currentMclcUser.uuid
-        }
-      };
-    }
+  currentMclcUser = session;
+  if (isExpiringSoon(session)) {
+    ensureValidAuth(session).then((check) => {
+      currentMclcUser = check.ok ? check.profile : null;
+      if (!check.ok) {
+        sendToRenderer("launcher:signed-out", { message: check.message });
+      }
+    });
   }
-
-  currentMclcUser = null;
-  return { authenticated: false };
+  return { authenticated: true, profile: { name: session.name, uuid: session.uuid } };
 });
 
 ipcMain.handle("launcher:auth-login", async () => {
@@ -577,23 +587,88 @@ ipcMain.handle("launcher:auth-logout", async () => {
   return { ok: true };
 });
 
-ipcMain.handle("launcher:auth", async () => {
+// --- UI data ---
+
+ipcMain.handle("launcher:versions", async () => {
   try {
-    const mc = await loginWithMicrosoft(mainWindow);
-    const mclcAuth = mc.mclc(true);
-    saveAuthProfile(mclcAuth);
-    currentMclcUser = mclcAuth;
-    return {
-      ok: true,
-      profile: {
-        name: mclcAuth.name,
-        uuid: mclcAuth.uuid
-      }
-    };
-  } catch (error) {
-    return { ok: false, message: error.message || "Login failed." };
+    return { ok: true, ...(await listReleaseVersions(fetchJson)) };
+  } catch (_error) {
+    return { ok: false, latest: null, releases: [] };
   }
 });
+
+ipcMain.handle("launcher:system-info", () => ({
+  totalMemoryMb: Math.floor(os.totalmem() / (1024 * 1024)),
+  appVersion: require("./package.json").version,
+  profileSlugs: getProfileSlugs()
+}));
+
+ipcMain.handle("launcher:server-status", async (_event, host, port) => {
+  const cleanHost = String(host || "").trim();
+  const cleanPort = Number.parseInt(port, 10) || 25565;
+  if (!cleanHost || cleanPort < 1 || cleanPort > 65535) {
+    return { online: false, error: "No server set" };
+  }
+  return pingServer(cleanHost, cleanPort);
+});
+
+ipcMain.handle("launcher:open-game-folder", async (_event, instanceId) => {
+  try {
+    const dir = getInstanceDir(instanceId);
+    fs.mkdirSync(dir, { recursive: true });
+    const error = await shell.openPath(dir);
+    return { ok: !error, message: error };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+});
+
+ipcMain.handle("launcher:mods-search", async (_event, query, version) => {
+  const cleanQuery = String(query || "").trim().slice(0, 100);
+  const cleanVersion = /^[\w.-]{1,32}$/.test(String(version || "")) ? String(version) : "";
+  try {
+    return { ok: true, hits: await searchModrinthMods(cleanQuery, cleanVersion) };
+  } catch (_error) {
+    return { ok: false, hits: [], message: "Could not reach Modrinth. Check your connection." };
+  }
+});
+
+ipcMain.handle("launcher:instance-delete", async (_event, instanceId, name) => {
+  if (!instanceId || instanceId === "default") {
+    return { ok: false, message: "The default instance can't be deleted." };
+  }
+  if (activeLauncher) {
+    return { ok: false, message: "Close Minecraft before deleting an instance." };
+  }
+  let dir;
+  try {
+    dir = getInstanceDir(instanceId);
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "warning",
+    buttons: ["Delete", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    title: "Delete instance",
+    message: `Delete "${String(name || instanceId).slice(0, 60)}"?`,
+    detail: "Its worlds, mods, screenshots and settings will be removed. This can't be undone."
+  });
+  if (response !== 0) {
+    return { ok: false, cancelled: true };
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { ok: true };
+});
+
+ipcMain.handle("launcher:install-update", () => {
+  if (autoUpdater) {
+    autoUpdater.quitAndInstall();
+  }
+});
+
+// --- Launch ---
 
 ipcMain.handle("launcher:start", async (_event, launchConfig) => {
   if (activeLauncher) {
@@ -641,75 +716,59 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     username: authToUse.name
   };
 
-  try {
-    const launchVersion = enforcedConfig?.version || "unknown version";
-    const serverHost = enforcedConfig?.serverHost || "unknown";
-    const serverPort = enforcedConfig?.serverPort || "?";
-    let currentPresenceState = getPresenceState(serverHost, serverPort);
-    let hasSwitchedToInGame = false;
+  const launchVersion = formatVersion(enforcedConfig?.version);
+  let currentPresenceState = enforcedConfig?.serverHost
+    ? getPresenceState(enforcedConfig.serverHost)
+    : "Main Menu";
+  let isInGame = false;
+  const presenceFor = (smallImageKey, smallImageText) =>
+    setDiscordPresence({ state: `${launchVersion} | ${currentPresenceState}`, smallImageKey, smallImageText });
 
+  const markInGame = () => {
+    if (isInGame) return;
+    isInGame = true;
     clearInGameFallbackTimer();
+    sendPhase("running", "Minecraft is running.");
+    presenceFor("play_icon", "In game");
+  };
 
-    await setDiscordPresence({
-      state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-      smallImageKey: "play_icon",
-      smallImageText: "Starting"
-    });
+  const PRESENCE_BY_STAGE = {
+    java: ["minecraft_icon", "Installing Java"],
+    loader: ["minecraft_icon", "Installing mods"],
+    mods: ["minecraft_icon", "Installing mods"],
+    game: ["minecraft_icon", "Downloading"],
+    launching: ["play_icon", "Starting"]
+  };
+  let presenceStage = null;
+  // launchMinecraft reports a failure via "Launch error:" and then onExit; keep the
+  // error visible instead of letting onExit reset the UI to idle.
+  let launchFailed = false;
 
-    inGameFallbackTimer = setTimeout(() => {
-      if (!activeLauncher || hasSwitchedToInGame) {
-        return;
-      }
-      hasSwitchedToInGame = true;
-      setDiscordPresence({
-        state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-        smallImageKey: "play_icon",
-        smallImageText: "In game"
-      });
-    }, 20000);
+  clearInGameFallbackTimer();
+  sendPhase("preparing", "Starting launch sequence...");
+  presenceFor("play_icon", "Starting");
 
+  try {
     activeLauncher = await launchMinecraft(enforcedConfig, {
+      onProgress: (progress) => {
+        sendProgress(progress);
+        if (progress.stage !== presenceStage && PRESENCE_BY_STAGE[progress.stage]) {
+          presenceStage = progress.stage;
+          presenceFor(...PRESENCE_BY_STAGE[progress.stage]);
+        }
+        if (progress.stage === "launching" && !inGameFallbackTimer) {
+          // If no recognisable "game started" log line appears, assume in-game after 20s.
+          inGameFallbackTimer = setTimeout(markInGame, 20000);
+        }
+      },
       onStatus: (message) => {
         sendStatus(message);
 
         const connectedServer = parseConnectedServer(message);
         if (connectedServer) {
-          currentPresenceState = getPresenceState(
-            connectedServer.host,
-            connectedServer.port
-          );
-          setDiscordPresence({
-            state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-            smallImageKey: "play_icon",
-            smallImageText: "In game"
-          });
-          return;
-        }
-
-        if (message.includes("Preparing parkour speedrunner mod pack")) {
-          setDiscordPresence({
-            state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-            smallImageKey: "minecraft_icon",
-            smallImageText: "Installing mods"
-          });
-          return;
-        }
-
-        if (message.includes("Downloading")) {
-          setDiscordPresence({
-            state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-            smallImageKey: "minecraft_icon",
-            smallImageText: "Downloading"
-          });
-          return;
-        }
-
-        if (message.includes("Launching with")) {
-          setDiscordPresence({
-            state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-            smallImageKey: "play_icon",
-            smallImageText: "Starting"
-          });
+          currentPresenceState = getPresenceState(connectedServer.host);
+          isInGame = false;
+          markInGame();
           return;
         }
 
@@ -718,37 +777,23 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
           /knotclient/i.test(message) ||
           /net\.minecraft\.client\.main\.main/i.test(message)
         ) {
-          clearInGameFallbackTimer();
-          hasSwitchedToInGame = true;
-          setDiscordPresence({
-            state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-            smallImageKey: "play_icon",
-            smallImageText: "In game"
-          });
+          markInGame();
           return;
         }
 
-        if (message.includes("Minecraft closed")) {
+        if (message.startsWith("Launch error:")) {
+          launchFailed = true;
           clearInGameFallbackTimer();
-          setDiscordPresence({
-            smallImageKey: "minecraft_icon",
-            smallImageText: "Minecraft"
-          });
-          return;
-        }
-
-        if (message.includes("Launch error")) {
-          clearInGameFallbackTimer();
-          setDiscordPresence({
-            state: `${formatVersion(launchVersion)} | ${currentPresenceState}`,
-            smallImageKey: "minecraft_icon",
-            smallImageText: "Check launcher logs"
-          });
+          sendPhase("error", message.slice("Launch error:".length).trim());
+          presenceFor("minecraft_icon", "Check launcher logs");
         }
       },
       onExit: () => {
         clearInGameFallbackTimer();
         activeLauncher = null;
+        if (!launchFailed) {
+          sendPhase("idle", "Minecraft closed. Ready to launch again.");
+        }
         setDiscordPresence({
           smallImageKey: "minecraft_icon",
           smallImageText: "Minecraft"
@@ -759,9 +804,9 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     return { ok: true, message: "Launch sequence started." };
   } catch (error) {
     activeLauncher = null;
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Unknown launch failure."
-    };
+    clearInGameFallbackTimer();
+    const message = error instanceof Error ? error.message : "Unknown launch failure.";
+    sendPhase("error", message);
+    return { ok: false, message };
   }
 });

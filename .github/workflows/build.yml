@@ -3,11 +3,15 @@ name: Build Legends Launcher
 on:
   push:
     branches: [ "master", "main" ]
+    tags: [ "v*" ]
+  pull_request:
   workflow_dispatch: # Allows you to run it manually from the Actions tab
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write # needed to upload installers to a GitHub Release on tag builds
 
     steps:
       - name: Checkout Code
@@ -16,14 +20,24 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install Dependencies
         run: npm ci
 
-      - name: Build Windows .exe
+      - name: Run Tests
+        run: npm test
+
+      - name: Build Windows installer
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: npm run build
+
+      # Pushing a tag like v1.0.0 publishes the installer + latest.yml (used by auto-update)
+      # to GitHub Releases. The website links to releases/latest/download/Legends-Launcher-Setup.exe.
+      - name: Publish release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

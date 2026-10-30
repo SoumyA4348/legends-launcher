@@ -3,7 +3,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const https = require("https");
 const { app } = require("electron");
-const { Client } = require("minecraft-launcher-core");
+const java = require("./java");
+const { VerifiedCache } = require("./verified-cache");
 
 const PARKOUR_SPEEDRUNNER_MODS = [
   { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
@@ -34,6 +35,16 @@ const FPS_HUD_MODS = [
   { projects: ["fpsdisplay", "fps-monitor"], name: "FPS Display" }
 ];
 
+// Every Modrinth slug each profile installs, so the UI can mark those mods as already included.
+function getProfileSlugs() {
+  const slugs = (mods) => mods.flatMap((mod) => mod.projects);
+  return {
+    competitive: slugs(COMPETITIVE_MODS),
+    full: slugs(PARKOUR_SPEEDRUNNER_MODS),
+    fpsHud: slugs(FPS_HUD_MODS)
+  };
+}
+
 const MANAGED_MODS_STATE_FILE = ".launcher-managed-mods.json";
 
 function isLegacyVersion(version) {
@@ -61,13 +72,96 @@ function sanitizeMemoryMb(value) {
   return parsed;
 }
 
-function usernameToOfflineUuid(username) {
-  // Stable UUID for offline auth based on username
-  const digest = crypto.createHash("md5").update(`OfflinePlayer:${username}`).digest("hex");
-  return `${digest.slice(0, 8)}${digest.slice(8, 12)}${digest.slice(12, 16)}${digest.slice(
-    16,
-    20
-  )}${digest.slice(20)}`;
+const GAME_PROGRESS_LABELS = {
+  assets: "Downloading game assets",
+  "assets-copy": "Preparing game assets",
+  natives: "Downloading native libraries",
+  classes: "Downloading libraries",
+  "classes-custom": "Downloading Fabric libraries",
+  "classes-maven-custom": "Downloading Fabric libraries"
+};
+
+// LEGENDS_DATA_DIR points all game data at another folder, e.g. to test a clean first run.
+function getUserDataBase() {
+  if (process.env.LEGENDS_DATA_DIR) {
+    return process.env.LEGENDS_DATA_DIR;
+  }
+  return app && typeof app.getPath === "function" ? app.getPath("appData") : process.cwd();
+}
+
+function getMinecraftRoot() {
+  return path.join(getUserDataBase(), "PrivateCustomMinecraftLauncher", ".minecraft");
+}
+
+function getRuntimesDir() {
+  return path.join(getUserDataBase(), "PrivateCustomMinecraftLauncher", "runtimes");
+}
+
+const INSTANCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+// Each instance has its own game directory (mods, saves, options.txt); versions, libraries
+// and assets stay shared in the root. "default" is the root itself, so existing worlds stay put.
+function getInstanceDir(instanceId) {
+  const id = String(instanceId || "default");
+  if (id === "default") {
+    return getMinecraftRoot();
+  }
+  if (!INSTANCE_ID_PATTERN.test(id)) {
+    throw new Error("Invalid instance id.");
+  }
+  return path.join(getUserDataBase(), "PrivateCustomMinecraftLauncher", "instances", id);
+}
+
+const MODRINTH_SLUG_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+const MAX_EXTRA_MODS = 100;
+
+// User-added Modrinth mods arrive from the renderer as [{ slug, name }].
+function sanitizeExtraMods(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((mod) => mod && MODRINTH_SLUG_PATTERN.test(String(mod.slug)))
+    .slice(0, MAX_EXTRA_MODS)
+    .map((mod) => ({ projects: [String(mod.slug)], name: String(mod.name || mod.slug).slice(0, 80) }));
+}
+
+async function searchModrinthMods(query, version) {
+  const facets = [["project_type:mod"], ["categories:fabric"]];
+  if (version) {
+    facets.push([`versions:${version}`]);
+  }
+  const url = `https://api.modrinth.com/v2/search?limit=20&query=${encodeURIComponent(
+    query
+  )}&facets=${encodeURIComponent(JSON.stringify(facets))}`;
+  const result = await fetchJson(url);
+  return (Array.isArray(result?.hits) ? result.hits : []).map((hit) => ({
+    slug: hit.slug,
+    name: hit.title,
+    description: hit.description || "",
+    downloads: hit.downloads || 0,
+    iconUrl: hit.icon_url || ""
+  }));
+}
+
+// Finds (or downloads, on first run) the Java major this Minecraft version requires.
+async function ensureJavaRuntime(version, minecraftRoot, hooks) {
+  const onProgress = hooks.onProgress || (() => {});
+  const runtimesDir = getRuntimesDir();
+  const major = await java.getRequiredJavaMajor(version, { minecraftRoot, fetchJson });
+  const existing = java.findJava(major, { runtimesDir });
+  if (existing) {
+    hooks.onStatus(`Using Java ${major}: ${existing}`);
+    return existing;
+  }
+  return java.provisionJava(major, {
+    runtimesDir,
+    fetchJson,
+    downloadFile,
+    onStatus: hooks.onStatus,
+    onProgress: (received, total) =>
+      onProgress({ stage: "java", label: `Downloading Java ${major}`, current: received, total, unit: "bytes" })
+  });
 }
 
 function parseBoolean(value, fallback) {
@@ -93,9 +187,12 @@ function normalizeLaunchProfile(value) {
 
 function fetchJson(url, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (response) => {
+    // Modrinth asks API clients to identify themselves.
+    const req = https.get(url, { headers: { "User-Agent": "SoumyA4348/legends-launcher" } }, (response) => {
       if (response.statusCode && response.statusCode >= 400) {
-        reject(new Error(`Request failed (${response.statusCode}) for ${url}`));
+        const error = new Error(`Request failed (${response.statusCode}) for ${url}`);
+        error.statusCode = response.statusCode;
+        reject(error);
         response.resume();
         return;
       }
@@ -119,7 +216,7 @@ function fetchJson(url, timeoutMs = 15000) {
   });
 }
 
-function downloadFile(url, destinationPath, maxRedirects = 5) {
+function downloadFile(url, destinationPath, { maxRedirects = 5, onProgress = null } = {}) {
   return new Promise((resolve, reject) => {
     if (maxRedirects <= 0) {
       reject(new Error(`Too many redirects when downloading ${url}`));
@@ -145,7 +242,7 @@ function downloadFile(url, destinationPath, maxRedirects = 5) {
         cleanup();
         response.resume();
         const redirectUrl = new URL(response.headers.location, url).toString();
-        downloadFile(redirectUrl, destinationPath, maxRedirects - 1)
+        downloadFile(redirectUrl, destinationPath, { maxRedirects: maxRedirects - 1, onProgress })
           .then(resolve)
           .catch(reject);
         return;
@@ -158,6 +255,14 @@ function downloadFile(url, destinationPath, maxRedirects = 5) {
         return;
       }
 
+      if (onProgress) {
+        const total = Number.parseInt(response.headers["content-length"], 10) || 0;
+        let received = 0;
+        response.on("data", (chunk) => {
+          received += chunk.length;
+          onProgress(received, total);
+        });
+      }
       response.pipe(file);
       file.on("finish", () => {
         file.close((err) => {
@@ -305,6 +410,14 @@ function isJarCorrupted(jarPath) {
       return true;
     }
 
+    // Fast path: jars almost never carry a ZIP comment, so the EOCD record sits in the
+    // final 22 bytes. Only fall back to the 64 KB scan when it doesn't.
+    const eocdBuf = Buffer.alloc(4);
+    fs.readSync(fd, eocdBuf, 0, 4, stat.size - 22);
+    if (eocdBuf.equals(EOCD_SIG)) {
+      return false;
+    }
+
     const scanSize = Math.min(stat.size, EOCD_SCAN_SIZE);
     const tailBuf = Buffer.alloc(scanSize);
     fs.readSync(fd, tailBuf, 0, scanSize, stat.size - scanSize);
@@ -332,82 +445,156 @@ function isJarCorrupted(jarPath) {
   }
 }
 
-async function ensureParkourMods(version, minecraftRoot, hooks) {
-  return ensureMods(version, minecraftRoot, hooks, PARKOUR_SPEEDRUNNER_MODS);
+// Runs `worker` over `items` with at most `limit` in flight; results keep input order.
+async function mapLimit(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
-async function ensureMods(version, minecraftRoot, hooks, modsList) {
-  const modsDir = path.join(minecraftRoot, "mods");
+const MOD_CONCURRENCY = 4;
+
+// Dependency chains deeper than this are not real-world; the cap stops a bad API loop.
+const MAX_DEPENDENCY_ROUNDS = 3;
+
+async function ensureMods(version, gameDir, hooks, modsList) {
+  const modsDir = path.join(gameDir, "mods");
   fs.mkdirSync(modsDir, { recursive: true });
-  const selectedFileNames = [];
-
   const loaders = isLegacyVersion(version) ? ["fabric", "legacy-fabric"] : ["fabric"];
+  const onProgress = hooks.onProgress || (() => {});
+  let done = 0;
+  let total = modsList.length;
+  onProgress({ stage: "mods", label: "Installing mods", current: 0, total });
 
-  for (const mod of modsList) {
-    hooks.onStatus(`Resolving mod: ${mod.name}...`);
-    let modVersions = null;
-    for (const projectId of mod.projects) {
-      try {
-        const versionsUrl = `https://api.modrinth.com/v2/project/${projectId}/version?loaders=${encodeURIComponent(
-          JSON.stringify(loaders)
-        )}&game_versions=${encodeURIComponent(JSON.stringify([version]))}`;
-        const candidateVersions = await fetchJson(versionsUrl);
-        if (Array.isArray(candidateVersions) && candidateVersions.length > 0) {
-          modVersions = candidateVersions;
-          break;
-        }
-      } catch (_error) {
-        // Try fallback project id if available.
-      }
-    }
+  const fileNames = [];
+  const installedProjects = new Set();
+  let queue = modsList;
 
-    if (!Array.isArray(modVersions) || modVersions.length === 0) {
-      hooks.onStatus(`Skipped ${mod.name}: no Fabric build for ${version}.`);
-      continue;
-    }
-
-    const selectedVersion = modVersions[0];
-    const files = Array.isArray(selectedVersion.files) ? selectedVersion.files : [];
-    const fileMeta = files.find((entry) => entry.primary) || files[0];
-
-    if (!fileMeta?.url || !fileMeta?.filename) {
-      hooks.onStatus(`Skipped ${mod.name}: no downloadable file found.`);
-      continue;
-    }
-
-    // Strip any directory components from the filename — Modrinth is trusted but
-    // a compromised/malicious API response could otherwise write files outside modsDir.
-    const safeFilename = path.basename(fileMeta.filename);
-    if (!safeFilename || safeFilename !== fileMeta.filename) {
-      hooks.onStatus(`Skipped ${mod.name}: unsafe filename rejected.`);
-      continue;
-    }
-
-    const targetPath = path.join(modsDir, safeFilename);
-    selectedFileNames.push(safeFilename);
-    if (fs.existsSync(targetPath)) {
-      if (!isJarCorrupted(targetPath)) {
-        hooks.onStatus(`${mod.name} already installed.`);
+  // Each round resolves its mods first, so two names for the same Modrinth project
+  // (e.g. a profile mod the user also added) download once. Required dependencies
+  // the resolved versions declare are queued for the next round.
+  for (let round = 0; round < MAX_DEPENDENCY_ROUNDS && queue.length > 0; round++) {
+    const resolved = await mapLimit(queue, MOD_CONCURRENCY, (mod) => resolveMod(mod, { version, loaders, hooks }));
+    const toInstall = [];
+    for (const entry of resolved) {
+      if (!entry || installedProjects.has(entry.projectId)) {
+        done += 1;
         continue;
       }
-      fs.rmSync(targetPath, { force: true });
-      hooks.onStatus(`Corrupted mod detected, re-downloading ${mod.name}...`);
+      installedProjects.add(entry.projectId);
+      toInstall.push(entry);
     }
 
-    hooks.onStatus(`Downloading ${mod.name} (${safeFilename})...`);
-    await downloadFile(fileMeta.url, targetPath);
-    const expectedSha512 = fileMeta.hashes?.sha512;
-    if (expectedSha512) {
-      const actualSha512 = crypto.createHash("sha512").update(fs.readFileSync(targetPath)).digest("hex");
-      if (actualSha512 !== expectedSha512) {
-        fs.rmSync(targetPath, { force: true });
-        throw new Error(`Checksum mismatch for ${mod.name} (${safeFilename}); download discarded.`);
+    const installed = await mapLimit(toInstall, MOD_CONCURRENCY, async (entry) => {
+      try {
+        return await installMod(entry, { modsDir, hooks });
+      } finally {
+        done += 1;
+        onProgress({ stage: "mods", label: `Installing mods (${entry.mod.name})`, current: done, total });
+      }
+    });
+    fileNames.push(...installed.filter(Boolean));
+
+    const nextQueue = [];
+    for (const entry of toInstall) {
+      for (const dependencyId of entry.dependencies) {
+        if (!installedProjects.has(dependencyId) && !nextQueue.some((mod) => mod.projects[0] === dependencyId)) {
+          nextQueue.push({ projects: [dependencyId], name: `dependency of ${entry.mod.name}` });
+        }
       }
     }
-    hooks.onStatus(`Installed ${mod.name}.`);
+    queue = nextQueue;
+    total += nextQueue.length;
+  }
+  return fileNames;
+}
+
+// Finds the newest Modrinth file for one mod. Returns null when there is no compatible build.
+async function resolveMod(mod, { version, loaders, hooks }) {
+  hooks.onStatus(`Resolving mod: ${mod.name}...`);
+  let modVersions = null;
+  let unreachable = null;
+  for (const projectId of mod.projects) {
+    try {
+      const versionsUrl = `https://api.modrinth.com/v2/project/${encodeURIComponent(projectId)}/version?loaders=${encodeURIComponent(
+        JSON.stringify(loaders)
+      )}&game_versions=${encodeURIComponent(JSON.stringify([version]))}`;
+      const candidateVersions = await fetchJson(versionsUrl);
+      if (Array.isArray(candidateVersions) && candidateVersions.length > 0) {
+        modVersions = candidateVersions;
+        break;
+      }
+    } catch (error) {
+      // A 4xx means this id doesn't exist: try the fallback id. Anything else (offline,
+      // timeout, 5xx) must not look like "no build", or the mod would be pruned from disk.
+      if (!(error.statusCode >= 400 && error.statusCode < 500)) {
+        unreachable = error;
+      }
+    }
   }
 
-  return selectedFileNames;
+  if ((!Array.isArray(modVersions) || modVersions.length === 0) && unreachable) {
+    throw new Error(`Could not reach Modrinth for ${mod.name}: ${unreachable.message}`);
+  }
+  if (!Array.isArray(modVersions) || modVersions.length === 0) {
+    hooks.onStatus(`Skipped ${mod.name}: no Fabric build for ${version}.`);
+    return null;
+  }
+
+  const selectedVersion = modVersions[0];
+  const files = Array.isArray(selectedVersion.files) ? selectedVersion.files : [];
+  const fileMeta = files.find((entry) => entry.primary) || files[0];
+
+  if (!fileMeta?.url || !fileMeta?.filename) {
+    hooks.onStatus(`Skipped ${mod.name}: no downloadable file found.`);
+    return null;
+  }
+
+  const dependencies = (Array.isArray(selectedVersion.dependencies) ? selectedVersion.dependencies : [])
+    .filter((dep) => dep.dependency_type === "required" && MODRINTH_SLUG_PATTERN.test(String(dep.project_id)))
+    .map((dep) => String(dep.project_id));
+  return { mod, projectId: selectedVersion.project_id || mod.projects[0], fileMeta, dependencies };
+}
+
+// Downloads and verifies one resolved mod. Returns its file name, or null when skipped.
+async function installMod({ mod, fileMeta }, { modsDir, hooks }) {
+  // Strip any directory components from the filename — Modrinth is trusted but
+  // a compromised/malicious API response could otherwise write files outside modsDir.
+  const safeFilename = path.basename(fileMeta.filename);
+  if (!safeFilename || safeFilename !== fileMeta.filename) {
+    hooks.onStatus(`Skipped ${mod.name}: unsafe filename rejected.`);
+    return null;
+  }
+
+  const targetPath = path.join(modsDir, safeFilename);
+  if (fs.existsSync(targetPath)) {
+    if (!isJarCorrupted(targetPath)) {
+      hooks.onStatus(`${mod.name} already installed.`);
+      return safeFilename;
+    }
+    fs.rmSync(targetPath, { force: true });
+    hooks.onStatus(`Corrupted mod detected, re-downloading ${mod.name}...`);
+  }
+
+  hooks.onStatus(`Downloading ${mod.name} (${safeFilename})...`);
+  await downloadFile(fileMeta.url, targetPath);
+  const expectedSha512 = fileMeta.hashes?.sha512;
+  if (expectedSha512) {
+    const actualSha512 = crypto.createHash("sha512").update(fs.readFileSync(targetPath)).digest("hex");
+    if (actualSha512 !== expectedSha512) {
+      fs.rmSync(targetPath, { force: true });
+      throw new Error(`Checksum mismatch for ${mod.name} (${safeFilename}); download discarded.`);
+    }
+  }
+  hooks.onStatus(`Installed ${mod.name}.`);
+  return safeFilename;
 }
 
 function readManagedModsState(minecraftRoot) {
@@ -425,7 +612,8 @@ function readManagedModsState(minecraftRoot) {
     return {
       mcVersion: parsed.mcVersion || null,
       fabricVersion: parsed.fabricVersion || null,
-      files: Array.isArray(parsed.files) ? parsed.files : []
+      files: Array.isArray(parsed.files) ? parsed.files : [],
+      ...(parsed.modsKey ? { modsKey: parsed.modsKey, resolvedAt: Number(parsed.resolvedAt) || 0 } : {})
     };
   } catch (_error) {
     return { mcVersion: null, fabricVersion: null, files: [] };
@@ -455,7 +643,19 @@ function walkDir(dir, ext, results = []) {
   return results;
 }
 
-function validateAndRepairLibraries(minecraftRoot, hooks) {
+// Jars already found intact (and unchanged since) are skipped when a cache is given.
+function isJarCorruptedCached(jarPath, cache) {
+  if (cache?.has(jarPath, "zip")) {
+    return false;
+  }
+  const corrupted = isJarCorrupted(jarPath);
+  if (!corrupted) {
+    cache?.add(jarPath, "zip");
+  }
+  return corrupted;
+}
+
+function validateAndRepairLibraries(minecraftRoot, hooks, cache = null) {
   const librariesDir = path.join(minecraftRoot, "libraries");
   if (!fs.existsSync(librariesDir)) {
     return;
@@ -465,7 +665,7 @@ function validateAndRepairLibraries(minecraftRoot, hooks) {
   let deletedCount = 0;
 
   for (const jarPath of jars) {
-    if (isJarCorrupted(jarPath)) {
+    if (isJarCorruptedCached(jarPath, cache)) {
       try {
         fs.rmSync(jarPath, { force: true });
         hooks.onStatus(`Removed corrupted library: ${path.basename(jarPath)}`);
@@ -481,7 +681,7 @@ function validateAndRepairLibraries(minecraftRoot, hooks) {
   }
 }
 
-function validateAndRepairMods(minecraftRoot, hooks) {
+function validateAndRepairMods(minecraftRoot, hooks, cache = null) {
   const modsDir = path.join(minecraftRoot, "mods");
   if (!fs.existsSync(modsDir)) {
     return;
@@ -491,7 +691,7 @@ function validateAndRepairMods(minecraftRoot, hooks) {
   let deletedCount = 0;
 
   for (const jarPath of jars) {
-    if (isJarCorrupted(jarPath)) {
+    if (isJarCorruptedCached(jarPath, cache)) {
       try {
         fs.rmSync(jarPath, { force: true });
         hooks.onStatus(`Removed corrupted mod: ${path.basename(jarPath)}`);
@@ -541,7 +741,85 @@ function pruneManagedMods(minecraftRoot, selectedFiles, hooks) {
   }
 }
 
+const DOWNLOAD_CONNECTIONS = 16;
+
+// MCLC SHA-1-hashes every asset (~800 MB) and native on every launch. Route its checks
+// through the verified cache so only new or changed files are hashed.
+let activeVerifiedCache = null;
+
+function useVerifiedCacheForMclc(cache) {
+  activeVerifiedCache = cache;
+  const Handler = require("minecraft-launcher-core/components/handler");
+  if (Handler.prototype.checkSum.usesVerifiedCache) {
+    return;
+  }
+  const original = Handler.prototype.checkSum;
+  const cachedCheckSum = async function (hash, file) {
+    if (activeVerifiedCache?.has(file, hash)) {
+      return true;
+    }
+    const ok = await original.call(this, hash, file);
+    if (ok) {
+      activeVerifiedCache?.add(file, hash);
+    }
+    return ok;
+  };
+  cachedCheckSum.usesVerifiedCache = true;
+  Handler.prototype.checkSum = cachedCheckSum;
+}
+
+// Fabric and Modrinth are asked for updates at most once a day; in between, an unchanged mod
+// list launches straight from disk. If they can't be reached, the installed set is reused.
+const MOD_RECHECK_MS = 24 * 60 * 60 * 1000;
+
+async function prepareModdedProfile(version, minecraftRoot, gameDir, mods, hooks) {
+  const onProgress = hooks.onProgress || (() => {});
+  const modsDir = path.join(gameDir, "mods");
+  const modsKey = `${version}|${mods.map((mod) => mod.projects[0]).join(",")}`;
+  const prevState = readManagedModsState(gameDir);
+  const cachedProfile = prevState.fabricVersion ? `fabric-loader-${prevState.fabricVersion}-${version}` : null;
+  const cacheUsable =
+    prevState.modsKey === modsKey &&
+    Boolean(cachedProfile) &&
+    fs.existsSync(path.join(minecraftRoot, "versions", cachedProfile, `${cachedProfile}.json`)) &&
+    // basename: never let a tampered state file point outside the mods folder
+    prevState.files.every((file) => fs.existsSync(path.join(modsDir, path.basename(String(file)))));
+
+  if (cacheUsable && Date.now() - prevState.resolvedAt < MOD_RECHECK_MS) {
+    hooks.onStatus(`Fabric and ${prevState.files.length} mods are up to date.`);
+    return cachedProfile;
+  }
+
+  try {
+    onProgress({ stage: "loader", label: "Installing Fabric", current: 0, total: 0 });
+    const fabricProfile = await ensureFabricProfile(version, minecraftRoot, hooks);
+    // Profile id is "fabric-loader-<loaderVersion>-<mcVersion>"
+    const fabricVersion = fabricProfile.slice("fabric-loader-".length, fabricProfile.length - version.length - 1);
+
+    // Mods are built per Minecraft version (not per loader version), so only a Minecraft
+    // version change forces a clean re-download.
+    if (prevState.mcVersion !== version && prevState.files.length > 0) {
+      hooks.onStatus(`Minecraft version changed — removing ${prevState.files.length} old mod(s)...`);
+      for (const fileName of prevState.files) {
+        fs.rmSync(path.join(modsDir, path.basename(String(fileName))), { force: true });
+      }
+    }
+
+    const files = await ensureMods(version, gameDir, hooks, mods);
+    pruneManagedMods(gameDir, files, hooks);
+    writeManagedModsState(gameDir, { mcVersion: version, fabricVersion, files, modsKey, resolvedAt: Date.now() });
+    return fabricProfile;
+  } catch (error) {
+    if (!cacheUsable) {
+      throw error;
+    }
+    hooks.onStatus(`Couldn't check for mod updates (${error.message}). Launching with your installed mods.`);
+    return cachedProfile;
+  }
+}
+
 async function launchMinecraft(config, hooks) {
+  const { Client } = require("minecraft-launcher-core");
   const launcher = new Client();
   let minecraftProcess = null;
   let hasExited = false;
@@ -569,18 +847,22 @@ async function launchMinecraft(config, hooks) {
   const installParkourPack = parseBoolean(config?.installParkourPack, true);
   const installFpsHud = parseBoolean(config?.installFpsHud, true);
   const launchProfile = normalizeLaunchProfile(config?.launchProfile);
+  const extraMods = sanitizeExtraMods(config?.extraMods);
+
+  const onProgress = hooks.onProgress || (() => {});
 
   if (!version) {
     throw new Error("Minecraft version is required.");
   }
 
-  if (!serverHost) {
-    throw new Error("Server host is required.");
-  }
-  const appDataPath =
-    app && typeof app.getPath === "function" ? app.getPath("appData") : process.cwd();
-  const minecraftRoot = path.join(appDataPath, "PrivateCustomMinecraftLauncher", ".minecraft");
+  const minecraftRoot = getMinecraftRoot();
+  const gameDir = getInstanceDir(config?.instanceId);
   fs.mkdirSync(minecraftRoot, { recursive: true });
+  fs.mkdirSync(gameDir, { recursive: true });
+
+  // Java first: it is the one prerequisite players most often lack.
+  onProgress({ stage: "java", label: "Checking Java", current: 0, total: 0 });
+  const javaPath = await ensureJavaRuntime(version, minecraftRoot, hooks);
   const launchVersion = {
     number: version,
     type: "release"
@@ -594,6 +876,7 @@ async function launchMinecraft(config, hooks) {
   if (installFpsHud) {
     mergedMods.push(...FPS_HUD_MODS);
   }
+  mergedMods.push(...extraMods);
 
   if (legacy) {
     // Legacy Minecraft (< 1.14) has no compatible Fabric performance mods, and
@@ -603,34 +886,15 @@ async function launchMinecraft(config, hooks) {
     hooks.onStatus(
       `Legacy version ${version} detected — launching vanilla (Fabric mods are not available for this version).`
     );
-    pruneManagedMods(minecraftRoot, [], hooks);
-    writeManagedModsState(minecraftRoot, { mcVersion: version, fabricVersion: null, files: [] });
+    if (extraMods.length > 0) {
+      hooks.onStatus(`Your ${extraMods.length} added mod(s) were skipped: they need Minecraft 1.14 or newer.`);
+    }
+    pruneManagedMods(gameDir, [], hooks);
+    writeManagedModsState(gameDir, { mcVersion: version, fabricVersion: null, files: [] });
   } else if (mergedMods.length > 0) {
     hooks.onStatus(
       launchProfile === "full" ? "Preparing full mod profile..." : "Preparing competitive profile..."
     );
-    const fabricProfile = await ensureFabricProfile(version, minecraftRoot, hooks);
-    // Extract loader version from profileId: "fabric-loader-<loaderVer>-<mcVer>"
-    const fabricLoaderVersion = fabricProfile.slice(
-      "fabric-loader-".length,
-      fabricProfile.length - version.length - 1
-    );
-
-    // If MC version or Fabric loader version changed since last run, purge stale mods
-    // so they are re-downloaded for the correct version pair.
-    const prevState = readManagedModsState(minecraftRoot);
-    if (prevState.mcVersion !== version || prevState.fabricVersion !== fabricLoaderVersion) {
-      if (prevState.files.length > 0) {
-        hooks.onStatus(
-          `Minecraft or Fabric version changed — removing ${prevState.files.length} stale mod(s)...`
-        );
-        const modsDir = path.join(minecraftRoot, "mods");
-        for (const fileName of prevState.files) {
-          fs.rmSync(path.join(modsDir, fileName), { force: true });
-        }
-      }
-    }
-
     const uniqueMods = [];
     const seenProjects = new Set();
     for (const mod of mergedMods) {
@@ -642,38 +906,22 @@ async function launchMinecraft(config, hooks) {
       uniqueMods.push(mod);
     }
 
-    const selectedFiles = await ensureMods(version, minecraftRoot, hooks, uniqueMods);
-    pruneManagedMods(minecraftRoot, selectedFiles, hooks);
-    writeManagedModsState(minecraftRoot, {
-      mcVersion: version,
-      fabricVersion: fabricLoaderVersion,
-      files: selectedFiles
-    });
+    launchVersion.custom = await prepareModdedProfile(version, minecraftRoot, gameDir, uniqueMods, hooks);
     if (installFpsHud) {
       hooks.onStatus("FPS overlay installed.");
     }
-    launchVersion.custom = fabricProfile;
   } else {
-    pruneManagedMods(minecraftRoot, [], hooks);
-    writeManagedModsState(minecraftRoot, { mcVersion: version, fabricVersion: null, files: [] });
+    pruneManagedMods(gameDir, [], hooks);
+    writeManagedModsState(gameDir, { mcVersion: version, fabricVersion: null, files: [] });
   }
 
-  forcePerformanceVideoSettings(minecraftRoot, hooks);
-
-  // Verified Microsoft Auth credentials
-  if (!auth || !auth.access_token || auth.access_token === "0") {
-    throw new Error("Missing or invalid Microsoft authentication credentials.");
-  }
-
-  // Check for Java 21 installation
-  const java21Path = "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11.10-hotspot\\bin\\java.exe";
-  const hasJava21 = fs.existsSync(java21Path);
+  forcePerformanceVideoSettings(gameDir, hooks);
 
   const options = {
     authorization: auth,
     root: minecraftRoot,
     version: launchVersion,
-    ...(hasJava21 ? { javaPath: java21Path } : {}),
+    ...(javaPath ? { javaPath } : {}),
     memory: {
       max: `${maxMemoryMb}M`,
       min: `${maxMemoryMb}M`
@@ -683,7 +931,7 @@ async function launchMinecraft(config, hooks) {
       "-XX:+UseG1GC",
       "-XX:MaxGCPauseMillis=130",
       "-XX:+ParallelRefProcEnabled",
-      "-XX:+AlwaysPreTouch",
+      // No AlwaysPreTouch: touching the whole heap up front adds ~1 s to every game start.
       "-XX:+PerfDisableSharedMem",
       "-XX:G1HeapWastePercent=5",
       "-XX:G1MixedGCCountTarget=8",
@@ -691,31 +939,45 @@ async function launchMinecraft(config, hooks) {
       "-XX:G1HeapRegionSize=16M",
       "-XX:-OmitStackTraceInFastThrow"
     ],
-    quickPlay: {
-      type: "multiplayer",
-      identifier: `${serverHost}:${serverPort}`
-    },
+    // No server set: open the main menu instead of joining.
+    ...(serverHost
+      ? { quickPlay: { type: "multiplayer", identifier: `${serverHost}:${serverPort}` } }
+      : {}),
     overrides: {
-      detached: false
+      detached: false,
+      // MCLC's default of 2 connections makes a first install crawl through ~4,000 asset files.
+      maxSockets: DOWNLOAD_CONNECTIONS,
+      ...(gameDir !== minecraftRoot ? { gameDirectory: gameDir } : {})
     }
   };
 
-  validateAndRepairLibraries(minecraftRoot, hooks);
-  validateAndRepairMods(minecraftRoot, hooks);
+  const verified = new VerifiedCache(minecraftRoot);
+  useVerifiedCacheForMclc(verified);
+  validateAndRepairLibraries(minecraftRoot, hooks, verified);
+  validateAndRepairMods(gameDir, hooks, verified);
   hooks.onStatus(`Preparing Minecraft ${version} for ${username}...`);
 
   launcher.on("debug", (line) => hooks.onStatus(`DEBUG: ${line}`));
   launcher.on("data", (line) => hooks.onStatus(line));
+  // MCLC reports { type, task: <done>, total } per file group (assets, natives, classes...).
   launcher.on("progress", (event) => {
-    if (!event || typeof event !== "object") {
+    if (!event || !Number.isFinite(event.task) || !Number.isFinite(event.total)) {
       return;
     }
-    if (event.task && Number.isFinite(event.total) && Number.isFinite(event.current)) {
-      hooks.onStatus(`${event.task}: ${event.current}/${event.total}`);
-    }
+    onProgress({
+      stage: "game",
+      label: GAME_PROGRESS_LABELS[event.type] || "Downloading game files",
+      current: event.task,
+      total: event.total
+    });
   });
-  launcher.on("close", () => {
-    exitOnce("Minecraft closed.");
+  // A non-zero exit code means the game crashed; surface it as an error, not a normal close.
+  launcher.on("close", (code) => {
+    exitOnce(
+      code
+        ? `Launch error: Minecraft exited unexpectedly (code ${code}). Open the console for details.`
+        : "Minecraft closed."
+    );
   });
   launcher.on("error", (error) => {
     exitOnce(
@@ -724,7 +986,9 @@ async function launchMinecraft(config, hooks) {
   });
 
   try {
+    onProgress({ stage: "game", label: "Checking game files", current: 0, total: 0 });
     minecraftProcess = await launcher.launch(options);
+    onProgress({ stage: "launching", label: "Starting Minecraft", current: 0, total: 0 });
     if (!minecraftProcess) {
       exitOnce("Launch error: Minecraft process did not start.");
       throw new Error("Minecraft process did not start.");
@@ -744,11 +1008,36 @@ async function launchMinecraft(config, hooks) {
   } catch (error) {
     exitOnce(`Launch error: ${error instanceof Error ? error.message : "Unknown launcher failure"}`);
     throw error;
+  } finally {
+    verified.save();
   }
 
   return { launcher, process: minecraftProcess };
 }
 
 module.exports = {
-  launchMinecraft
+  launchMinecraft,
+  getMinecraftRoot,
+  getRuntimesDir,
+  getInstanceDir,
+  getProfileSlugs,
+  searchModrinthMods,
+  fetchJson,
+  sanitizeExtraMods,
+  // Exported for unit and integration tests
+  downloadFile,
+  ensureMods,
+  ensureFabricProfile,
+  isLegacyVersion,
+  sanitizePort,
+  sanitizeMemoryMb,
+  parseBoolean,
+  normalizeLaunchProfile,
+  mapLimit,
+  isJarCorrupted,
+  forcePerformanceVideoSettings,
+  prepareModdedProfile,
+  useVerifiedCacheForMclc,
+  readManagedModsState,
+  pruneManagedMods
 };

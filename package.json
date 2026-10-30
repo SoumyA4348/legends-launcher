@@ -1,25 +1,51 @@
 {
   "name": "legends-launcher",
   "version": "0.1.0",
-  "description": "Legends Launcher",
+  "description": "One-click Minecraft launcher with automatic Java, Fabric and performance mods",
   "main": "main.js",
   "author": "Soumya Patel",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "build": "electron-builder --win"
+    "test": "node --test",
+    "build": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.legends.launcher",
     "productName": "Legends Launcher",
+    "artifactName": "Legends-Launcher-Setup.${ext}",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json"
+    ],
     "win": {
       "target": "nsis"
-    }
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "SoumyA4348",
+        "repo": "legends-launcher",
+        "releaseType": "release"
+      }
+    ]
   },
   "dependencies": {
     "discord-rpc": "^4.0.1",
-    "minecraft-launcher-core": "latest",
+    "electron-updater": "^6.8.11",
+    "minecraft-launcher-core": "^3.18.2",
     "msmc": "^5.0.5"
   },
   "devDependencies": {

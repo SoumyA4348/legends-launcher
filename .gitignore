@@ -5,6 +5,7 @@ dist/
 
 # OS and Editor exclusions
 .vscode/
+*.code-workspace
 Thumbs.db
 .DS_Store
 
