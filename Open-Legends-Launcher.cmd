@@ -27,7 +27,8 @@ if not exist "node_modules" (
   )
 )
 
-echo Starting Legends Launcher...
-call npm.cmd start
+REM Start Electron on its own and let this console close, instead of keeping a terminal
+REM window open for as long as the launcher runs.
+start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."
 
 endlocal
