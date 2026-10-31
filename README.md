@@ -2,7 +2,7 @@
 
 A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft, press **Play**, and the launcher sets up everything else: the right Java runtime, the Fabric loader, a tuned performance mod pack and the game files. It then drops you straight into your server.
 
-**[Download for Windows](https://github.com/SoumyA4348/legends-launcher/releases/latest/download/Legends-Launcher-Setup.exe)** · one-click installer, updates itself automatically.
+**[Download for Windows](https://github.com/SoumyA4348/legends-launcher/releases/latest/download/Legends-Launcher-Setup.exe)** · [Website](https://soumyapatel.dev/legends) · one-click installer, updates itself automatically.
 
 ## Features
 
@@ -93,3 +93,5 @@ See [OPTIMIZATION_GUIDE.md](./OPTIMIZATION_GUIDE.md) for in-game and Windows per
 ## License
 
 MIT
+
+Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.

@@ -60,7 +60,7 @@ const DISCORD_BUTTONS = [
   },
   {
     label: process.env.DISCORD_BUTTON_2_LABEL || "Download Launcher",
-    url: process.env.DISCORD_BUTTON_2_URL || ""
+    url: process.env.DISCORD_BUTTON_2_URL || "https://soumyapatel.dev/legends"
   }
 ];
 const DISCORD_SHOW_SERVER = process.env.DISCORD_SHOW_SERVER !== "false";
