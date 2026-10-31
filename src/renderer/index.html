@@ -27,6 +27,18 @@
       <button class="nav-btn" data-view="console">Console</button>
     </nav>
 
+    <div class="support-wrap">
+      <button class="support-btn" id="supportBtn" aria-haspopup="menu" aria-expanded="false">Support</button>
+      <div class="support-menu" id="supportMenu" role="menu" hidden>
+        <button role="menuitem" data-support="bug">Report a bug</button>
+        <button role="menuitem" id="copyDiagnostics">Copy diagnostic info</button>
+        <button role="menuitem" data-support="website">Website &amp; help</button>
+        <button role="menuitem" data-support="email">Email support</button>
+        <hr />
+        <button role="menuitem" data-support="privacy">Privacy Policy</button>
+      </div>
+    </div>
+
     <button class="account-btn" id="accountBtn" aria-label="Account">
       <svg id="accountIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>
       <img id="accountAvatar" alt="" hidden />

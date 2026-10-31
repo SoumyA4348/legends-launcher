@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("launcherApi", {
   searchMods: (query, version, type) => ipcRenderer.invoke("launcher:mods-search", query, version, type),
   deleteInstance: (instanceId, name) => ipcRenderer.invoke("launcher:instance-delete", instanceId, name),
   installUpdate: () => ipcRenderer.invoke("launcher:install-update"),
+  openSupport: (target) => ipcRenderer.invoke("launcher:open-support", target),
   getAnalytics: () => ipcRenderer.invoke("launcher:analytics-get"),
   setAnalytics: (enabled) => ipcRenderer.invoke("launcher:analytics-set", enabled),
   track: (eventName, props) => ipcRenderer.invoke("launcher:analytics-track", eventName, props),

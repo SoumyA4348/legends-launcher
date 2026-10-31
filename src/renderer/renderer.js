@@ -616,6 +616,7 @@ function applyVersions(result) {
 async function loadSystemInfo() {
   const info = await api.getSystemInfo().catch(() => null);
   if (!info) return;
+  systemInfo = info;
   $("appVersion").textContent = `v${info.appVersion}`;
   profileSlugs = info.profileSlugs || profileSlugs;
   renderModResults();
@@ -1201,6 +1202,52 @@ async function loadNews() {
   $("newsList").replaceChildren(...rows);
   $("news").hidden = rows.length === 0;
 }
+
+// ---------- Support ----------
+const supportBtn = $("supportBtn");
+const supportMenu = $("supportMenu");
+let systemInfo = null;
+
+function toggleSupportMenu(open = supportMenu.hidden) {
+  supportMenu.hidden = !open;
+  supportBtn.setAttribute("aria-expanded", String(open));
+}
+
+supportBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleSupportMenu();
+});
+document.addEventListener("click", (event) => {
+  if (!supportMenu.hidden && !supportMenu.contains(event.target)) toggleSupportMenu(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !supportMenu.hidden) toggleSupportMenu(false);
+});
+supportMenu.querySelectorAll("[data-support]").forEach((item) =>
+  item.addEventListener("click", () => {
+    toggleSupportMenu(false);
+    api.openSupport(item.dataset.support).catch(() => {});
+  })
+);
+
+// What a bug report needs, without the console's full log: versions, setup and the last status.
+$("copyDiagnostics").addEventListener("click", async () => {
+  toggleSupportMenu(false);
+  const instance = currentInstance();
+  const text = [
+    `Legends Launcher v${systemInfo?.appVersion || "?"}`,
+    `OS: ${systemInfo?.osVersion || "?"}, ${formatMemory(systemInfo?.totalMemoryMb || 0)} RAM, ${formatMemory(Number(memoryInput.value))} for Minecraft`,
+    `Minecraft ${versionInput.value.trim() || "?"}, ${PROFILE_INFO[getProfile()].label} profile, ${instance.extraMods.length} added mods/packs`,
+    `Instances: ${instances.length}, signed in: ${currentAuth ? "yes" : "no"}`,
+    `Status: ${statusEl.textContent}`
+  ].join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Diagnostic info copied. Paste it into your bug report.");
+  } catch (_error) {
+    toast("Could not copy the diagnostic info.", true);
+  }
+});
 
 // ---------- Privacy ----------
 // The toggle only shows in builds that have an analytics key.

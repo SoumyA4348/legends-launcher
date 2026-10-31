@@ -821,8 +821,21 @@ ipcMain.handle("launcher:versions", async () => {
 ipcMain.handle("launcher:system-info", () => ({
   totalMemoryMb: Math.floor(os.totalmem() / (1024 * 1024)),
   appVersion: require("./package.json").version,
+  osVersion: `${os.type()} ${os.release()}`,
   profileSlugs: getProfileSlugs()
 }));
+
+// Support menu links. The renderer names a target; only these fixed addresses can be opened.
+const SUPPORT_LINKS = {
+  bug: "https://github.com/SoumyA4348/legends-launcher/issues/new?template=bug_report.yml",
+  website: "https://soumyapatel.dev/legends",
+  privacy: "https://soumyapatel.dev/legends/privacy",
+  email: "mailto:spatel457322@gmail.com?subject=Legends%20Launcher%20support"
+};
+
+ipcMain.handle("launcher:open-support", (_event, target) => {
+  if (Object.hasOwn(SUPPORT_LINKS, target)) shell.openExternal(SUPPORT_LINKS[target]);
+});
 
 ipcMain.handle("launcher:server-status", async (_event, host, port) => {
   const cleanHost = String(host || "").trim();
