@@ -502,7 +502,11 @@ function renderMyMods() {
   );
   myModsEl.replaceChildren(...rows);
   $("myModsEmpty").hidden = rows.length > 0;
-  $("modsSub").textContent = `Extra Modrinth mods for the "${instance.name}" instance. They install on top of the ${PROFILE_INFO[instance.launchProfile].label} profile on your next launch.`;
+  // Name the instance only once there are several to tell apart.
+  const where = instances.length > 1 ? ` for the "${instance.name}" instance` : "";
+  $("modsSub").textContent = contentType === "mod"
+    ? `Extra Modrinth mods${where}. They install on top of the ${PROFILE_INFO[instance.launchProfile].label} profile on your next launch.`
+    : `Modrinth ${info.plural}${where}. They install on your next launch${contentType === "shader" ? ", along with Iris" : ""}.`;
   const notice = $("modsNotice");
   notice.hidden = contentType === "resourcepack" || !isLegacyVersion(instance.version);
   notice.textContent = contentType === "shader"
