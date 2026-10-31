@@ -13,6 +13,7 @@ const analytics = require("./src/analytics");
 const skins = require("./src/skin");
 const { buildNewsItems } = require("./src/news");
 const { redactSecrets } = require("./src/redact");
+const review = require("./src/review");
 
 // Public Aptabase app key (it ships inside the app either way); the env var overrides it.
 const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY ?? "A-US-1329639096";
@@ -837,6 +838,84 @@ ipcMain.handle("launcher:open-support", (_event, target) => {
   if (Object.hasOwn(SUPPORT_LINKS, target)) shell.openExternal(SUPPORT_LINKS[target]);
 });
 
+// --- Reviews ---
+// Asked after the second real play session (see src/review.js); one review per player on the website.
+const REVIEWS_URL = "https://soumyapatel.dev/api/legends/reviews";
+
+function getReviewStatePath() {
+  return path.join(app.getPath("userData"), "review.json");
+}
+
+function readReviewStates() {
+  try {
+    return JSON.parse(fs.readFileSync(getReviewStatePath(), "utf8")) || {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function writeReviewStates(states) {
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    fs.writeFileSync(getReviewStatePath(), JSON.stringify(states));
+  } catch (_error) {
+    // not fatal: the next session tries again
+  }
+}
+
+function currentPlayerId() {
+  return currentMclcUser?.uuid ? review.playerId(currentMclcUser.uuid) : null;
+}
+
+function noteFinishedSession(playedMs) {
+  const id = currentPlayerId();
+  if (!id) return;
+  const states = readReviewStates();
+  const { state, ask } = review.recordSession(states[id], playedMs);
+  states[id] = state;
+  writeReviewStates(states);
+  if (ask) sendToRenderer("launcher:review-prompt");
+}
+
+ipcMain.handle("launcher:review-status", () => {
+  const id = currentPlayerId();
+  return { canReview: Boolean(id) && !readReviewStates()[id]?.reviewed };
+});
+
+ipcMain.handle("launcher:review-submit", async (_event, rating, comment) => {
+  const id = currentPlayerId();
+  const stars = Number(rating);
+  if (!id || !Number.isInteger(stars) || stars < 1 || stars > 5) {
+    return { ok: false, message: "Sign in and pick a rating first." };
+  }
+  try {
+    const res = await fetch(REVIEWS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        player: id,
+        rating: stars,
+        comment: String(comment || "").slice(0, 500),
+        version: require("./package.json").version
+      }),
+      signal: AbortSignal.timeout(10000)
+    });
+    if (res.ok || res.status === 409) {
+      const states = readReviewStates();
+      states[id] = { ...review.normalizeState(states[id]), reviewed: true };
+      writeReviewStates(states);
+      if (res.ok) track("review_submitted", { rating: stars });
+      return { ok: res.ok, already: res.status === 409 };
+    }
+    return {
+      ok: false,
+      message: res.status === 429 ? "Too many reviews from your network today. Try again tomorrow." : "Couldn't send your review. Try again later."
+    };
+  } catch (_error) {
+    return { ok: false, message: "Couldn't reach the review server. Check your connection." };
+  }
+});
+
 ipcMain.handle("launcher:server-status", async (_event, host, port) => {
   const cleanHost = String(host || "").trim();
   const cleanPort = Number.parseInt(port, 10) || 25565;
@@ -1091,6 +1170,7 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
           track("game_crashed", { mcVersion, exitCode: Number(code) || 0, report: Boolean(crashReport) });
         } else if (isInGame) {
           track("game_closed", { mcVersion, played: analytics.minutesBucket(Date.now() - gameStartedAt), stopped: stopRequested });
+          noteFinishedSession(Date.now() - gameStartedAt);
         }
         if (stopRequested) {
           sendPhase("idle", "Minecraft stopped.");

@@ -34,6 +34,7 @@
         <button role="menuitem" id="copyDiagnostics">Copy diagnostic info</button>
         <button role="menuitem" data-support="website">Website &amp; help</button>
         <button role="menuitem" data-support="email">Email support</button>
+        <button role="menuitem" id="rateBtn" hidden>Rate Legends</button>
         <hr />
         <button role="menuitem" data-support="privacy">Privacy Policy</button>
       </div>
@@ -299,6 +300,26 @@
       </div>
     </section>
   </main>
+
+  <div class="modal" id="reviewModal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reviewTitle">
+      <h2 class="modal-title" id="reviewTitle">Enjoying Legends Launcher?</h2>
+      <p class="modal-sub">Your rating helps other players find it. It takes ten seconds.</p>
+      <div class="stars" id="reviewStars" role="radiogroup" aria-label="Rating">
+        <button role="radio" aria-checked="false" aria-label="1 star" data-stars="1">★</button>
+        <button role="radio" aria-checked="false" aria-label="2 stars" data-stars="2">★</button>
+        <button role="radio" aria-checked="false" aria-label="3 stars" data-stars="3">★</button>
+        <button role="radio" aria-checked="false" aria-label="4 stars" data-stars="4">★</button>
+        <button role="radio" aria-checked="false" aria-label="5 stars" data-stars="5">★</button>
+      </div>
+      <textarea id="reviewComment" maxlength="500" rows="3" placeholder="What do you like, or what should be better? (optional)"></textarea>
+      <div class="field-hint error" id="reviewError" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="reviewLater">Not now</button>
+        <button class="btn primary" id="reviewSubmit" disabled>Submit review</button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast" id="toast" role="alert"></div>
 

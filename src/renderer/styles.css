@@ -1409,3 +1409,77 @@ input[type="range"] {
   border: none;
   border-top: 1px solid var(--line);
 }
+
+/* ---------- Review dialog ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(38, 35, 35, 0.4);
+}
+
+.modal-card {
+  width: min(440px, 100%);
+  padding: 26px 28px 22px;
+  background: var(--panel-solid);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(38, 35, 35, 0.25);
+}
+
+.modal-title {
+  font-family: var(--font-pixel);
+  font-weight: 400;
+  font-size: 24px;
+}
+
+.modal-sub {
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+
+.stars {
+  display: flex;
+  gap: 4px;
+  margin: 18px 0 14px;
+}
+
+.stars button {
+  font-size: 32px;
+  line-height: 1;
+  color: #ddd5c9;
+  transition: color 0.1s, transform 0.1s;
+}
+
+.stars button.on {
+  color: var(--torch-deep);
+}
+
+.stars button:hover {
+  transform: scale(1.1);
+}
+
+.modal-card textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--field);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font: inherit;
+  resize: vertical;
+  user-select: text;
+}
+
+.modal-card textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}

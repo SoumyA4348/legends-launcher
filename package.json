@@ -1,6 +1,6 @@
 {
   "name": "legends-launcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "One-click Minecraft launcher with automatic Java, Fabric and performance mods",
   "main": "main.js",
   "author": "Soumya Patel",

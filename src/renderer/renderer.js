@@ -1213,9 +1213,13 @@ function toggleSupportMenu(open = supportMenu.hidden) {
   supportBtn.setAttribute("aria-expanded", String(open));
 }
 
-supportBtn.addEventListener("click", (event) => {
+supportBtn.addEventListener("click", async (event) => {
   event.stopPropagation();
   toggleSupportMenu();
+  if (!supportMenu.hidden) {
+    const status = await api.getReviewStatus().catch(() => null);
+    $("rateBtn").hidden = !status?.canReview;
+  }
 });
 document.addEventListener("click", (event) => {
   if (!supportMenu.hidden && !supportMenu.contains(event.target)) toggleSupportMenu(false);
@@ -1247,6 +1251,72 @@ $("copyDiagnostics").addEventListener("click", async () => {
   } catch (_error) {
     toast("Could not copy the diagnostic info.", true);
   }
+});
+
+// ---------- Reviews ----------
+// The main process asks after the second real play session; "Rate Legends" opens it any time.
+const reviewModal = $("reviewModal");
+const starButtons = [...document.querySelectorAll("#reviewStars [data-stars]")];
+let reviewRating = 0;
+
+function setReviewRating(value) {
+  reviewRating = value;
+  starButtons.forEach((star) => {
+    const on = Number(star.dataset.stars) <= value;
+    star.classList.toggle("on", on);
+    star.setAttribute("aria-checked", String(Number(star.dataset.stars) === value));
+  });
+  $("reviewSubmit").disabled = value === 0;
+}
+
+function openReview() {
+  if (!reviewModal.hidden || !currentAuth) return;
+  setReviewRating(0);
+  $("reviewComment").value = "";
+  $("reviewError").hidden = true;
+  reviewModal.hidden = false;
+  starButtons[4].focus();
+}
+
+function closeReview() {
+  reviewModal.hidden = true;
+}
+
+starButtons.forEach((star) => star.addEventListener("click", () => setReviewRating(Number(star.dataset.stars))));
+$("reviewLater").addEventListener("click", closeReview);
+reviewModal.addEventListener("click", (event) => {
+  if (event.target === reviewModal) closeReview();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !reviewModal.hidden) closeReview();
+});
+$("rateBtn").addEventListener("click", () => {
+  toggleSupportMenu(false);
+  openReview();
+});
+
+$("reviewSubmit").addEventListener("click", async () => {
+  const submit = $("reviewSubmit");
+  submit.disabled = true;
+  submit.textContent = "Sending…";
+  const result = await api.submitReview(reviewRating, $("reviewComment").value.trim()).catch(() => null);
+  submit.textContent = "Submit review";
+  if (result?.ok || result?.already) {
+    closeReview();
+    toast(result.ok ? "Thanks for your review!" : "You've already reviewed Legends Launcher. Thanks!");
+    return;
+  }
+  submit.disabled = false;
+  $("reviewError").textContent = result?.message || "Couldn't send your review. Try again later.";
+  $("reviewError").hidden = false;
+});
+
+// The prompt arrives as the game closes, a moment before the "closed" phase: wait for it,
+// and never interrupt a new launch.
+api.onReviewPrompt(() => {
+  setTimeout(() => {
+    if (phase !== "running" && phase !== "preparing") openReview();
+  }, 1500);
 });
 
 // ---------- Privacy ----------

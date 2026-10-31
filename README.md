@@ -30,6 +30,8 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
 - **Console** with filtering, debug-line hiding, copy and auto-scroll.
 - **Discord Rich Presence** showing installing / downloading / in-game states.
 - **Auto-update** from GitHub Releases.
+- **Support menu**: report a bug, copy diagnostic info for a report, email support, and the website and privacy policy.
+- **Reviews**: after your second real play session the launcher asks for a quick rating (once per player; "Not now" asks once more later). You can also rate any time from the Support menu.
 - **Lightweight**: about 230 MB of RAM in two processes and near-zero CPU when idle. It uses no graphics memory, and drops to low priority while you play so it never competes with the game.
 
 ## Requirements
@@ -41,7 +43,7 @@ The installer needs no admin rights and installs for the current user only. Unin
 
 ## Privacy
 
-The launcher sends anonymous usage stats to [Aptabase](https://aptabase.com) (open source, no cookies, no stored IP addresses) so we can see which Minecraft versions people play and which launches fail. Events: launcher opened, launch started/failed, game started/closed/crashed, account added/switched, mod or pack added, instance created, update installed. Each carries only coarse details such as Minecraft version, mod count, an error category or a rounded play time.
+The launcher sends anonymous usage stats to [Aptabase](https://aptabase.com) (open source, no cookies, no stored IP addresses) so we can see which Minecraft versions people play and which launches fail. If you leave a review, your rating, optional comment and an anonymous one-way hash of your account id are sent to soumyapatel.dev so each player can review once. Events: launcher opened, launch started/failed, game started/closed/crashed, account added/switched, mod or pack added, instance created, update installed. Each carries only coarse details such as Minecraft version, mod count, an error category or a rounded play time.
 
 It never sends your Minecraft name, UUID, Microsoft tokens, server addresses or file paths. Turn it off any time in **Settings → Privacy**.
 ## Development
