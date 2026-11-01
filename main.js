@@ -1071,7 +1071,20 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     : "Main Menu";
   let isInGame = false;
   let minimizedForGame = false;
+  let gameExited = false;
+  let minimizeBackupTimer = null;
   const minimizeWhilePlaying = launchConfig?.launcherBehavior === "minimize";
+  // Minimize once per launch, when the game window is up (not when Java starts, which
+  // left nothing on screen while the game loaded). If the player brings the launcher
+  // back mid-game, it stays up.
+  const minimizeForGame = () => {
+    clearTimeout(minimizeBackupTimer);
+    if (!minimizeWhilePlaying || minimizedForGame || gameExited) return;
+    minimizedForGame = true;
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
+      mainWindow.minimize();
+    }
+  };
   const presenceFor = (smallImageKey, smallImageText) =>
     setDiscordPresence({ state: `${launchVersion} | ${currentPresenceState}`, smallImageKey, smallImageText });
 
@@ -1085,10 +1098,8 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     clearInGameFallbackTimer();
     sendPhase("running", "Minecraft is running.");
     presenceFor("play_icon", "In game");
-    if (minimizeWhilePlaying && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
-      mainWindow.minimize();
-      minimizedForGame = true;
-    }
+    // Backup in case no window line is recognised (unusual versions or mod packs).
+    if (minimizeWhilePlaying && !minimizedForGame) minimizeBackupTimer = setTimeout(minimizeForGame, 25000);
     setLauncherPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);
   };
 
@@ -1134,11 +1145,23 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
       onStatus: (message) => {
         sendStatus(message);
 
+        // The launcher's own debug lines (including the launch command, which names the
+        // game's main class) say nothing about the game's state.
+        if (message.startsWith("DEBUG: ")) return;
+
         const connectedServer = parseConnectedServer(message);
         if (connectedServer) {
           currentPresenceState = getPresenceState(connectedServer.host);
           isInGame = false;
           markInGame();
+          minimizeForGame();
+          return;
+        }
+
+        // Window created: LWJGL 3 (1.13+) logs its backend, LWJGL 2 (1.12 and older) its version.
+        if (/Backend library: LWJGL|LWJGL Version:|Reloading ResourceManager/i.test(message)) {
+          markInGame();
+          minimizeForGame();
           return;
         }
 
@@ -1165,6 +1188,8 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
       },
       onExit: ({ code, crashReport } = {}) => {
         clearInGameFallbackTimer();
+        gameExited = true;
+        clearTimeout(minimizeBackupTimer);
         activeLauncher = null;
         if (isInGame && launchFailed && !stopRequested) {
           track("game_crashed", { mcVersion, exitCode: Number(code) || 0, report: Boolean(crashReport) });
