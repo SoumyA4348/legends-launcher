@@ -53,6 +53,9 @@ let lastPresenceSignature = "";
 let inGameFallbackTimer = null;
 const launcherSessionStart = Date.now();
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "1412366181511335948";
+// Our own Azure app, allow-listed by Mojang for the Minecraft API (approved 2026-11-02).
+const MS_CLIENT_ID = process.env.MS_CLIENT_ID || "902f0af9-f06a-4c26-a26f-e928f8cc0603";
+const MS_REDIRECT_URI = "https://login.microsoftonline.com/common/oauth2/nativeclient";
 const ENABLE_DISCORD_RPC = process.env.DISCORD_RPC !== "false";
 const DISCORD_BUTTONS = [
   {
@@ -547,7 +550,7 @@ async function ensureValidAuth(savedAuth) {
 async function refreshAuth(refreshToken) {
   try {
     const msmc = require("msmc");
-    const authManager = new msmc.Auth();
+    const authManager = new msmc.Auth({ client_id: MS_CLIENT_ID, redirect: MS_REDIRECT_URI });
     const xbox = await authManager.refresh(refreshToken);
     const mc = await xbox.getMinecraft();
     if (mc.isDemo()) {
@@ -567,8 +570,12 @@ async function refreshAuth(refreshToken) {
 function loginWithMicrosoft(parentWindow) {
   return new Promise((resolve, reject) => {
     const msmc = require("msmc");
-    const authManager = new msmc.Auth("select_account");
-    const redirectUri = "https://login.live.com/oauth20_desktop.srf";
+    const authManager = new msmc.Auth({
+      client_id: MS_CLIENT_ID,
+      redirect: MS_REDIRECT_URI,
+      prompt: "select_account"
+    });
+    const redirectUri = MS_REDIRECT_URI;
     const authUrl = authManager.createLink(redirectUri);
 
     const loginWin = new BrowserWindow({
@@ -696,7 +703,20 @@ ipcMain.handle("launcher:auth-login", async () => {
       }
     };
   } catch (error) {
-    return { ok: false, message: error.message || "Login failed." };
+    // msmc rejects with lexicon codes: a string, or { ts, response } for a failed HTTP call.
+    let detail = typeof error === "string" ? error : error && (error.ts || error.message);
+    if (error && error.response) {
+      const body = await error.response.text().catch(() => "");
+      console.error("[Auth] Login failed:", error.ts, error.response.status, body);
+      detail += ` (HTTP ${error.response.status})`;
+    } else {
+      console.error("[Auth] Login failed:", error);
+    }
+    // msmc signals "no Minecraft on this account" as a failed profile fetch, not a demo profile.
+    if (error && error.ts === "error.auth.minecraft.profile") {
+      return { ok: false, message: "This Microsoft account does not own Minecraft." };
+    }
+    return { ok: false, message: detail ? `Login failed: ${detail}` : "Login failed." };
   }
 });
 
