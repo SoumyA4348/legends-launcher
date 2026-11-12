@@ -101,6 +101,20 @@ function setLauncherPriority(priority) {
   }
 }
 
+// Fullscreen comes from the launcher's game window setting or from the game's own
+// options.txt (F11 or Video Settings), which wins once written.
+function startsFullscreen(config) {
+  if (config?.gameWindow?.fullscreen === true || config?.gameWindow?.fullscreen === "true") {
+    return true;
+  }
+  try {
+    const options = fs.readFileSync(path.join(getInstanceDir(config?.instanceId), "options.txt"), "utf8");
+    return /^fullscreen:true\s*$/m.test(options);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function restoreMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -1093,10 +1107,13 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
   let minimizedForGame = false;
   let gameExited = false;
   let minimizeBackupTimer = null;
-  const minimizeWhilePlaying = launchConfig?.launcherBehavior === "minimize";
-  // Minimize once per launch, when the game window is up (not when Java starts, which
-  // left nothing on screen while the game loaded). If the player brings the launcher
-  // back mid-game, it stays up.
+  // A fullscreen game already covers the launcher, and minimizing hands focus to another
+  // window: the game drops out of fullscreen and the display flips resolution.
+  const minimizeWhilePlaying =
+    launchConfig?.launcherBehavior === "minimize" && !startsFullscreen(launchConfig);
+  // Minimize once per launch, after the game window is up (not when Java starts, which
+  // left nothing on screen while the game loaded, nor while the window is being created).
+  // If the player brings the launcher back mid-game, it stays up.
   const minimizeForGame = () => {
     clearTimeout(minimizeBackupTimer);
     if (!minimizeWhilePlaying || minimizedForGame || gameExited) return;
@@ -1178,10 +1195,17 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
           return;
         }
 
-        // Window created: LWJGL 3 (1.13+) logs its backend, LWJGL 2 (1.12 and older) its version.
-        if (/Backend library: LWJGL|LWJGL Version:|Reloading ResourceManager/i.test(message)) {
+        // Window up: the first resource reload runs after the window and GL context exist.
+        if (/Reloading ResourceManager/i.test(message)) {
           markInGame();
           minimizeForGame();
+          return;
+        }
+
+        // Window about to be created: LWJGL 3 (1.13+) logs its backend, LWJGL 2 (1.12 and
+        // older) its version. Too early to minimize.
+        if (/Backend library: LWJGL|LWJGL Version:/i.test(message)) {
+          markInGame();
           return;
         }
 
