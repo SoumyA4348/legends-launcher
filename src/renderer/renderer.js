@@ -414,7 +414,7 @@ $("newInstanceBtn").addEventListener("click", () => toggleNewInstanceRow(true));
 $("cancelInstanceBtn").addEventListener("click", () => toggleNewInstanceRow(false));
 $("createInstanceBtn").addEventListener("click", createInstance);
 newInstanceName.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") createInstance();
+  if (event.key === "Enter" && !event.isComposing) createInstance();
   if (event.key === "Escape") toggleNewInstanceRow(false);
 });
 
