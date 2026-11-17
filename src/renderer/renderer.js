@@ -1145,7 +1145,8 @@ $("copyLogs").addEventListener("click", async () => {
 // ---------- Updates ----------
 api.onUpdate(({ state, version, percent }) => {
   const banner = $("updateBanner");
-  banner.classList.add("visible");
+  // A failed download is retried in the background; hide the banner until it comes back.
+  banner.classList.toggle("visible", state !== "failed");
   if (state === "ready") {
     $("updateText").textContent = `Legends Launcher ${version} is ready to install.`;
     $("updateBtn").hidden = false;

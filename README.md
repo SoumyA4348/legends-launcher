@@ -78,7 +78,7 @@ Inspired by Netflix's [Chaos Monkey](https://netflixtechblog.com/the-netflix-sim
 LEGENDS_CHAOS=0.5 LEGENDS_DATA_DIR=./chaos-data npm start   # ~50% of requests fail
 ```
 
-The first runs found four problems, now fixed. Each one has a regression test in `tests/chaos.test.js`:
+The runs found six problems, now fixed. Each one has a regression test in `tests/chaos.test.js`:
 
 | What broke | Fix |
 | :--- | :--- |
@@ -86,6 +86,8 @@ The first runs found four problems, now fixed. Each one has a regression test in
 | A download cut off partway through left Play stuck forever | Errors that happen mid-download now fail the download, which is then retried |
 | A stalled download hung with no timeout | Downloads time out if no data arrives for 30 seconds |
 | An offline Java lookup gave Minecraft 1.8.9–1.16 Java 21, which those versions can't run on | The fallback now uses the Java version each release line shipped with |
+| One dropped connection while sending a review lost the review | Reviews are retried. The website keeps one review per player, so a repeat is safe |
+| An update download that failed partway left "Downloading update…" on screen for hours, and a failed check waited 4 hours to try again | The banner clears and the check is retried after 5, 15, then 60 minutes |
 
 ## Releasing
 

@@ -117,3 +117,120 @@ test("experiment: offline Java lookup keeps old versions on Java 8", async (t) =
   // A guess is never written to the permanent cache.
   assert.equal(fs.existsSync(path.join(minecraftRoot, ".legends-java-majors.json")), false);
 });
+
+// Reviews: the POST to the website had no retry, so one dropped connection lost the review.
+const { submitReview } = require("../src/review");
+
+function fakeFetch(answers) {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    const next = answers.shift();
+    if (next instanceof Error) throw next;
+    return { ok: next >= 200 && next < 300, status: next };
+  };
+  return { fetchImpl, calls };
+}
+
+test("experiment: a review survives a dropped connection and a 503", async () => {
+  const reset = Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
+  const { fetchImpl, calls } = fakeFetch([reset, 503, 201]);
+  const res = await submitReview("https://site/reviews", { rating: 5 }, { fetchImpl, baseDelayMs: 0 });
+  assert.equal(res.status, 201);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[2].body, { rating: 5 });
+});
+
+test("reviews: 409 (already reviewed) and 429 (daily limit) are answers, not retried", async () => {
+  for (const status of [409, 429]) {
+    const { fetchImpl, calls } = fakeFetch([status]);
+    const res = await submitReview("https://site/reviews", {}, { fetchImpl, baseDelayMs: 0 });
+    assert.equal(res.status, status);
+    assert.equal(calls.length, 1);
+  }
+});
+
+test("reviews: a server that stays down fails with its status after 3 tries", async () => {
+  const { fetchImpl, calls } = fakeFetch([503, 503, 503]);
+  const error = await submitReview("https://site/reviews", {}, { fetchImpl, baseDelayMs: 0 }).catch((e) => e);
+  assert.equal(error.statusCode, 503);
+  assert.equal(calls.length, 3);
+});
+
+// Auto-update: a download that failed partway left the banner on "Downloading update…" for
+// hours, and a failed check waited the full 4 hours before trying again.
+const { EventEmitter } = require("events");
+const { wireAutoUpdates, RETRY_DELAYS_MS } = require("../src/updater");
+
+function fakeUpdater() {
+  const updater = new EventEmitter();
+  updater.checks = 0;
+  updater.checkForUpdates = async () => {
+    updater.checks++;
+  };
+  const sent = [];
+  const timers = [];
+  const setTimer = (fn, ms) => {
+    const timer = { fn, ms, cleared: false };
+    timers.push(timer);
+    return timer;
+  };
+  const clearTimer = (timer) => {
+    if (timer) timer.cleared = true;
+  };
+  wireAutoUpdates(updater, {
+    send: (payload) => sent.push(payload),
+    status: () => {},
+    setTimer,
+    clearTimer,
+    every: () => {},
+    chaos: createChaos({ rate: 0 })
+  });
+  const pending = () => timers.filter((timer) => !timer.cleared);
+  return { updater, sent, pending };
+}
+
+test("experiment: a download that fails partway clears the banner and retries soon", () => {
+  const { updater, sent, pending } = fakeUpdater();
+  assert.equal(updater.checks, 1);
+  updater.emit("update-available", { version: "9.9.9" });
+  updater.emit("download-progress", { percent: 37 });
+  updater.emit("error", new Error("net::ERR_CONNECTION_RESET"));
+  assert.deepEqual(sent.at(-1), { state: "failed", version: "9.9.9" });
+  assert.equal(pending().length, 1);
+  assert.equal(pending()[0].ms, RETRY_DELAYS_MS[0]);
+  pending()[0].fn();
+  assert.equal(updater.checks, 2);
+});
+
+test("updater: retries back off, never stack, and reset after a good check", () => {
+  const { updater, sent, pending } = fakeUpdater();
+  const delays = [];
+  for (let i = 0; i < RETRY_DELAYS_MS.length + 1; i++) {
+    updater.emit("error", new Error("offline"));
+    assert.equal(pending().length, 1);
+    delays.push(pending()[0].ms);
+  }
+  assert.deepEqual(delays, [...RETRY_DELAYS_MS, RETRY_DELAYS_MS.at(-1)]);
+  assert.equal(sent.length, 0, "a failed check with no download in flight shows nothing");
+  updater.emit("update-not-available", {});
+  assert.equal(pending().length, 0);
+  updater.emit("error", new Error("offline"));
+  assert.equal(pending()[0].ms, RETRY_DELAYS_MS[0]);
+});
+
+test("updater: chaos can fail a check, which then goes down the same retry path", async () => {
+  const updater = new EventEmitter();
+  updater.checkForUpdates = async () => {};
+  const timers = [];
+  wireAutoUpdates(updater, {
+    send: () => {},
+    status: () => {},
+    setTimer: (fn, ms) => timers.push(ms),
+    clearTimer: () => {},
+    every: () => {},
+    chaos: createChaos({ rate: 1, random: () => 0, log: () => {} })
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(timers, [RETRY_DELAYS_MS[0]]);
+});

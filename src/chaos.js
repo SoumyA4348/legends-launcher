@@ -15,10 +15,12 @@ function makeFault(kind, url) {
   if (kind === "server-error") {
     const error = new Error(`Chaos: injected 503 for ${url}`);
     error.statusCode = 503;
+    error.chaos = true;
     return error;
   }
   const error = new Error(`Chaos: injected ${kind === "reset" ? "connection reset" : "timeout"} for ${url}`);
   error.code = kind === "reset" ? "ECONNRESET" : "ETIMEDOUT";
+  error.chaos = true;
   return error;
 }
 
