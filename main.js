@@ -14,6 +14,7 @@ const skins = require("./src/skin");
 const { buildNewsItems } = require("./src/news");
 const { redactSecrets } = require("./src/redact");
 const review = require("./src/review");
+const { wireAutoUpdates } = require("./src/updater");
 
 // Public Aptabase app key (it ships inside the app either way); the env var overrides it.
 const APTABASE_APP_KEY = process.env.APTABASE_APP_KEY ?? "A-US-1329639096";
@@ -353,31 +354,11 @@ function initializeAutoUpdates() {
   }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  let pendingVersion = null;
-  autoUpdater.on("update-available", (info) => {
-    pendingVersion = info.version;
-    sendToRenderer("launcher:update", { state: "downloading", version: info.version, percent: 0 });
+  wireAutoUpdates(autoUpdater, {
+    send: (payload) => sendToRenderer("launcher:update", payload),
+    status: sendStatus
   });
-  autoUpdater.on("download-progress", (progress) => {
-    sendToRenderer("launcher:update", {
-      state: "downloading",
-      version: pendingVersion,
-      percent: Math.round(progress.percent || 0)
-    });
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    sendToRenderer("launcher:update", { state: "ready", version: info.version });
-  });
-  autoUpdater.on("error", (error) => {
-    // Only the first line: the full stack is noise in the console.
-    sendStatus(`Update check failed: ${String(error.message).split("\n")[0]}`);
-  });
-  autoUpdater.checkForUpdates().catch(() => {});
-  // Players leave the launcher open for hours: look for new releases every few hours too.
-  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), UPDATE_CHECK_INTERVAL_MS);
 }
-
-const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 function isGameRunning() {
   return Boolean(activeLauncher?.process && activeLauncher.process.exitCode === null);
@@ -923,16 +904,11 @@ ipcMain.handle("launcher:review-submit", async (_event, rating, comment) => {
     return { ok: false, message: "Sign in and pick a rating first." };
   }
   try {
-    const res = await fetch(REVIEWS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        player: id,
-        rating: stars,
-        comment: String(comment || "").slice(0, 500),
-        version: require("./package.json").version
-      }),
-      signal: AbortSignal.timeout(10000)
+    const res = await review.submitReview(REVIEWS_URL, {
+      player: id,
+      rating: stars,
+      comment: String(comment || "").slice(0, 500),
+      version: require("./package.json").version
     });
     if (res.ok || res.status === 409) {
       const states = readReviewStates();
@@ -945,8 +921,11 @@ ipcMain.handle("launcher:review-submit", async (_event, rating, comment) => {
       ok: false,
       message: res.status === 429 ? "Too many reviews from your network today. Try again tomorrow." : "Couldn't send your review. Try again later."
     };
-  } catch (_error) {
-    return { ok: false, message: "Couldn't reach the review server. Check your connection." };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error.statusCode ? "Couldn't send your review. Try again later." : "Couldn't reach the review server. Check your connection."
+    };
   }
 });
 

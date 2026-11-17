@@ -6,6 +6,7 @@ const { app } = require("electron");
 const java = require("./java");
 const { VerifiedCache } = require("./verified-cache");
 const { createChaos } = require("./chaos");
+const { withRetry } = require("./retry");
 
 const PARKOUR_SPEEDRUNNER_MODS = [
   { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
@@ -249,20 +250,6 @@ function normalizeLaunchProfile(value) {
 
 // LEGENDS_CHAOS=<rate> makes a share of requests fail on purpose (see chaos.js).
 const chaos = createChaos();
-
-// GETs are safe to repeat, so a dropped connection, timeout or 5xx gets more tries with a
-// short backoff. A 4xx (except 429) is a real answer and fails at once.
-async function withRetry(attemptFn, { attempts = 3, baseDelayMs = 400 } = {}) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await attemptFn();
-    } catch (error) {
-      const permanent = error.statusCode >= 400 && error.statusCode < 500 && error.statusCode !== 429;
-      if (permanent || attempt >= attempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
-    }
-  }
-}
 
 const chaosRequestJson = chaos.wrap("fetchJson", requestJson);
 function fetchJson(url, timeoutMs = 15000) {
