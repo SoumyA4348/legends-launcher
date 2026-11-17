@@ -67,7 +67,25 @@ npm run build    # build dist/Legends-Launcher-Setup.exe locally
 | `src/server-status.js` | Minecraft Server List Ping client |
 | `src/presence.js` | Discord presence helpers (privacy-safe server labels) |
 | `src/renderer/` | UI (HTML/CSS/JS, strict Content-Security-Policy) |
+| `src/chaos.js` | Chaos Monkey: fault injection for the network layer |
 | `tests/` | Unit and protocol tests |
+
+### Chaos testing
+
+Inspired by Netflix's [Chaos Monkey](https://netflixtechblog.com/the-netflix-simian-army-16e57fbab116), which shuts down production servers on purpose so engineers can find weak spots before users do. `src/chaos.js` is a small version of that idea for the launcher. It makes a share of the launcher's own requests fail with connection resets, timeouts or 503s:
+
+```bash
+LEGENDS_CHAOS=0.5 LEGENDS_DATA_DIR=./chaos-data npm start   # ~50% of requests fail
+```
+
+The first runs found four problems, now fixed. Each one has a regression test in `tests/chaos.test.js`:
+
+| What broke | Fix |
+| :--- | :--- |
+| One failed request (a 503 or a dropped connection) failed the whole launch | Requests are retried with backoff. A 4xx is a real answer and is not retried |
+| A download cut off partway through left Play stuck forever | Errors that happen mid-download now fail the download, which is then retried |
+| A stalled download hung with no timeout | Downloads time out if no data arrives for 30 seconds |
+| An offline Java lookup gave Minecraft 1.8.9–1.16 Java 21, which those versions can't run on | The fallback now uses the Java version each release line shipped with |
 
 ## Releasing
 
@@ -85,6 +103,7 @@ Optional environment variables:
 | :--- | :--- |
 | `LEGENDS_JAVA_PATH` | Use a specific `java`/`javaw` binary instead of auto-detection |
 | `LEGENDS_DATA_DIR` | Keep all game data and settings in this folder instead of `%APPDATA%` (handy for testing a clean first run) |
+| `LEGENDS_CHAOS` | Fail this share (0–1) of network requests on purpose, for resilience testing (see [Chaos testing](#chaos-testing)) |
 | `DISCORD_RPC=false` | Disable Discord Rich Presence |
 | `DISCORD_CLIENT_ID` | Use your own Discord application (art asset keys: `legends_launcher_logo`, `minecraft_icon`, `play_icon`) |
 | `DISCORD_SHOW_SERVER=false` | Always show "Private Server" instead of the server domain. Private/LAN IPs and IPv6 are hidden either way. |
