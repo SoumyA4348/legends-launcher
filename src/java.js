@@ -141,8 +141,21 @@ async function getRequiredJavaMajor(version, { minecraftRoot, fetchJson }) {
     }
     return major;
   } catch (_error) {
-    return 21;
+    return guessJavaMajor(version);
   }
+}
+
+// Offline best guess (never cached): the Java each release line shipped with. A flat 21
+// would hand 1.8.9-1.16 a runtime they can't start on.
+function guessJavaMajor(version) {
+  const match = /^1\.(\d+)(?:\.(\d+))?$/.exec(String(version));
+  if (!match) return 21;
+  const minor = Number(match[1]);
+  const patch = Number(match[2] || 0);
+  if (minor <= 16) return 8;
+  if (minor === 17) return 16;
+  if (minor < 20 || (minor === 20 && patch < 5)) return 17;
+  return 21;
 }
 
 function sha256File(filePath) {

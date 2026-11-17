@@ -5,6 +5,7 @@ const https = require("https");
 const { app } = require("electron");
 const java = require("./java");
 const { VerifiedCache } = require("./verified-cache");
+const { createChaos } = require("./chaos");
 
 const PARKOUR_SPEEDRUNNER_MODS = [
   { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
@@ -246,7 +247,34 @@ function normalizeLaunchProfile(value) {
   return normalized === "full" ? "full" : "competitive";
 }
 
+// LEGENDS_CHAOS=<rate> makes a share of requests fail on purpose (see chaos.js).
+const chaos = createChaos();
+
+// GETs are safe to repeat, so a dropped connection, timeout or 5xx gets more tries with a
+// short backoff. A 4xx (except 429) is a real answer and fails at once.
+async function withRetry(attemptFn, { attempts = 3, baseDelayMs = 400 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await attemptFn();
+    } catch (error) {
+      const permanent = error.statusCode >= 400 && error.statusCode < 500 && error.statusCode !== 429;
+      if (permanent || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
+    }
+  }
+}
+
+const chaosRequestJson = chaos.wrap("fetchJson", requestJson);
 function fetchJson(url, timeoutMs = 15000) {
+  return withRetry(() => chaosRequestJson(url, timeoutMs));
+}
+
+const chaosRequestFile = chaos.wrap("downloadFile", requestFile);
+function downloadFile(url, destinationPath, { retries = 2, ...options } = {}) {
+  return withRetry(() => chaosRequestFile(url, destinationPath, options), { attempts: retries + 1 });
+}
+
+function requestJson(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     // Modrinth asks API clients to identify themselves.
     const req = https.get(url, { headers: { "User-Agent": "SoumyA4348/legends-launcher" } }, (response) => {
@@ -277,7 +305,7 @@ function fetchJson(url, timeoutMs = 15000) {
   });
 }
 
-function downloadFile(url, destinationPath, { maxRedirects = 5, onProgress = null } = {}) {
+function requestFile(url, destinationPath, { maxRedirects = 5, onProgress = null, timeoutMs = 30000 } = {}) {
   return new Promise((resolve, reject) => {
     if (maxRedirects <= 0) {
       reject(new Error(`Too many redirects when downloading ${url}`));
@@ -303,7 +331,7 @@ function downloadFile(url, destinationPath, { maxRedirects = 5, onProgress = nul
         cleanup();
         response.resume();
         const redirectUrl = new URL(response.headers.location, url).toString();
-        downloadFile(redirectUrl, destinationPath, { maxRedirects: maxRedirects - 1, onProgress })
+        requestFile(redirectUrl, destinationPath, { maxRedirects: maxRedirects - 1, onProgress, timeoutMs })
           .then(resolve)
           .catch(reject);
         return;
@@ -312,9 +340,17 @@ function downloadFile(url, destinationPath, { maxRedirects = 5, onProgress = nul
       if (response.statusCode && response.statusCode >= 400) {
         cleanup();
         response.resume();
-        reject(new Error(`Download failed (${response.statusCode}) for ${url}`));
+        const error = new Error(`Download failed (${response.statusCode}) for ${url}`);
+        error.statusCode = response.statusCode;
+        reject(error);
         return;
       }
+
+      // A connection cut mid-body never reaches "finish"; without this the launch hangs.
+      response.on("error", (error) => {
+        cleanup();
+        reject(error);
+      });
 
       if (onProgress) {
         const total = Number.parseInt(response.headers["content-length"], 10) || 0;
@@ -341,6 +377,10 @@ function downloadFile(url, destinationPath, { maxRedirects = 5, onProgress = nul
           }
         });
       });
+    });
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Download stalled for ${timeoutMs}ms: ${url}`));
     });
 
     request.on("error", (error) => {
