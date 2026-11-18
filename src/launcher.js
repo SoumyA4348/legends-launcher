@@ -7,6 +7,7 @@ const java = require("./java");
 const { VerifiedCache } = require("./verified-cache");
 const { createChaos } = require("./chaos");
 const { withRetry } = require("./retry");
+const { beginBorderless, endBorderless, makeBorderless } = require("./borderless");
 
 const PARKOUR_SPEEDRUNNER_MODS = [
   { projects: ["fabric-api", "legacy-fabric-api"], name: "Fabric API" },
@@ -1010,12 +1011,14 @@ async function launchMinecraft(config, hooks) {
   const launcher = new Client();
   let minecraftProcess = null;
   let hasExited = false;
+  let borderlessDir = null;
   const startedAt = Date.now();
   const exitOnce = (message, code = 0) => {
     if (hasExited) {
       return;
     }
     hasExited = true;
+    if (borderlessDir) endBorderless(borderlessDir);
     // Look for the report before the status line, so the error can link to it.
     const crashReport = code ? findLatestCrashReport(getInstanceDir(config?.instanceId), startedAt) : null;
     if (message) {
@@ -1040,7 +1043,7 @@ async function launchMinecraft(config, hooks) {
   const extraContent = sanitizeExtraMods(config?.extraMods);
   const extraMods = extraContent.filter((item) => item.type === "mod");
   const packs = extraContent.filter((item) => item.type !== "mod");
-  const gameWindow = sanitizeGameWindow(config?.gameWindow);
+  let gameWindow = sanitizeGameWindow(config?.gameWindow);
 
   const onProgress = hooks.onProgress || (() => {});
 
@@ -1052,6 +1055,11 @@ async function launchMinecraft(config, hooks) {
   const gameDir = getInstanceDir(config?.instanceId);
   fs.mkdirSync(minecraftRoot, { recursive: true });
   fs.mkdirSync(gameDir, { recursive: true });
+  // Fullscreen starts windowed and goes borderless once the window is up (see borderless.js).
+  if (process.platform === "win32" && beginBorderless(gameDir, gameWindow?.fullscreen)) {
+    borderlessDir = gameDir;
+    gameWindow = gameWindow?.width ? { ...gameWindow, fullscreen: false } : null;
+  }
 
   // Java first: it is the one prerequisite players most often lack.
   onProgress({ stage: "java", label: "Checking Java", current: 0, total: 0 });
@@ -1206,6 +1214,7 @@ async function launchMinecraft(config, hooks) {
       exitOnce("Launch error: Minecraft process did not start.");
       throw new Error("Minecraft process did not start.");
     }
+    if (borderlessDir) makeBorderless(minecraftProcess.pid);
 
     minecraftProcess.on("close", () => {
       exitOnce("Minecraft closed.");
