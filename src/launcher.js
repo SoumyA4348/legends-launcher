@@ -712,9 +712,15 @@ function readManagedModsState(minecraftRoot) {
   }
 }
 
+// Swapped in whole: this list is how the launcher tells its own jars from the player's.
 function writeManagedModsState(minecraftRoot, state) {
   const statePath = path.join(minecraftRoot, MANAGED_MODS_STATE_FILE);
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  fs.writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2), "utf8");
+  fs.renameSync(`${statePath}.tmp`, statePath);
+}
+
+function managedModNames(minecraftRoot) {
+  return new Set(readManagedModsState(minecraftRoot).files.map((file) => path.basename(String(file))));
 }
 
 function walkDir(dir, ext, results = []) {
@@ -780,10 +786,16 @@ function validateAndRepairMods(minecraftRoot, hooks, cache = null) {
   }
 
   const jars = walkDir(modsDir, ".jar");
+  const managed = managedModNames(minecraftRoot);
   let deletedCount = 0;
 
   for (const jarPath of jars) {
     if (isJarCorruptedCached(jarPath, cache)) {
+      // Only the launcher's own jars are deleted (they download again); a player's jar is theirs.
+      if (path.dirname(jarPath) !== modsDir || !managed.has(path.basename(jarPath))) {
+        hooks.onStatus(`Your mod ${path.basename(jarPath)} looks damaged, so Minecraft may not start with it.`);
+        continue;
+      }
       try {
         fs.rmSync(jarPath, { force: true });
         hooks.onStatus(`Removed corrupted mod: ${path.basename(jarPath)}`);
@@ -799,6 +811,8 @@ function validateAndRepairMods(minecraftRoot, hooks, cache = null) {
   }
 }
 
+// Removes jars this launcher installed earlier that the new mod list no longer has. Mods the
+// player dropped into the folder themselves are never touched.
 function pruneManagedMods(minecraftRoot, selectedFiles, hooks) {
   const selectedSet = new Set(selectedFiles);
   const modsDir = path.join(minecraftRoot, "mods");
@@ -814,11 +828,12 @@ function pruneManagedMods(minecraftRoot, selectedFiles, hooks) {
     return;
   }
 
+  const managed = managedModNames(minecraftRoot);
   for (const fileName of existingFiles) {
     if (!fileName.endsWith(".jar")) {
       continue;
     }
-    if (!selectedSet.has(fileName)) {
+    if (managed.has(fileName) && !selectedSet.has(fileName)) {
       const filePath = path.join(modsDir, fileName);
       try {
         fs.rmSync(filePath, { force: true });
@@ -1258,5 +1273,6 @@ module.exports = {
   prepareModdedProfile,
   useVerifiedCacheForMclc,
   readManagedModsState,
-  pruneManagedMods
+  pruneManagedMods,
+  validateAndRepairMods
 };

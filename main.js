@@ -964,8 +964,11 @@ ipcMain.handle("launcher:instance-delete", async (_event, instanceId, name) => {
   if (!instanceId || instanceId === "default") {
     return { ok: false, message: "The default instance can't be deleted." };
   }
-  if (activeLauncher) {
-    return { ok: false, message: "Close Minecraft before deleting an instance." };
+  if (activeLauncher || launchPending) {
+    return {
+      ok: false,
+      message: launchPending ? "Wait for Minecraft to finish starting." : "Close Minecraft before deleting an instance."
+    };
   }
   let dir;
   try {
@@ -1032,7 +1035,23 @@ ipcMain.handle("launcher:install-update", () => {
 
 // --- Launch ---
 
+// True from Play until the game process exists. Preparing can take minutes, and a second launch
+// or deleting the instance meanwhile would race on the same files.
+let launchPending = false;
+
 ipcMain.handle("launcher:start", async (_event, launchConfig) => {
+  if (launchPending) {
+    return { ok: false, message: "Minecraft is already starting." };
+  }
+  launchPending = true;
+  try {
+    return await startLaunch(launchConfig);
+  } finally {
+    launchPending = false;
+  }
+});
+
+async function startLaunch(launchConfig) {
   if (activeLauncher) {
     const activeProcess = activeLauncher?.process;
     const isStillRunning = Boolean(activeProcess && activeProcess.exitCode === null);
@@ -1256,4 +1275,4 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     sendPhase("error", message);
     return { ok: false, message };
   }
-});
+}
