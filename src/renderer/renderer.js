@@ -828,9 +828,10 @@ async function handleLogout() {
   applyAccountResult(result || { ok: true, profile: null }, "");
 }
 
-// The saved session is shown at once; if its background refresh fails, sign the player out.
-api.onSignedOut(({ message }) => {
-  currentAuth = null;
+// The saved session is shown at once; if Microsoft refuses its refresh, that account is signed
+// out and the next saved one (if any) takes over.
+api.onSignedOut(({ message, profile }) => {
+  currentAuth = profile || null;
   setStatus(message || "Session expired. Sign in again to play.", "error");
   renderAccount();
   renderPlayButton();

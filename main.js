@@ -491,7 +491,9 @@ function writeAccountStore(store) {
     const contents = safeStorage.isEncryptionAvailable()
       ? ENCRYPTED_PREFIX + safeStorage.encryptString(json).toString("base64")
       : json;
-    fs.writeFileSync(filePath, contents, "utf8");
+    // Written beside and swapped in, so a crash mid-save leaves the old file, not half a file.
+    fs.writeFileSync(`${filePath}.tmp`, contents, "utf8");
+    fs.renameSync(`${filePath}.tmp`, filePath);
   } catch (err) {
     console.error("[Auth] Error saving auth profile:", err.message);
   }
@@ -511,13 +513,18 @@ function clearAuthProfile() {
   writeAccountStore(accounts.removeAccount(store, store.active));
 }
 
+// Drops one saved account by id: by the time a refresh fails, another one may be active.
+function removeSavedAccount(uuid) {
+  writeAccountStore(accounts.removeAccount(readAccountStore(), uuid));
+}
+
 function isExpiringSoon(auth) {
   return Date.now() >= (auth.meta?.exp || 0) - 5 * 60 * 1000;
 }
 
-// One refresh at a time: the startup background refresh and a Play click share it,
+// One refresh per account at a time: the startup background refresh and a Play click share it,
 // instead of spending the same refresh token twice.
-let pendingRefresh = null;
+const pendingRefresh = new Map();
 
 async function ensureValidAuth(savedAuth) {
   if (!savedAuth) {
@@ -528,38 +535,54 @@ async function ensureValidAuth(savedAuth) {
     return { ok: true, profile: savedAuth };
   }
 
-  const refreshToken = savedAuth.meta?.refresh;
-  if (!refreshToken) {
-    clearAuthProfile();
+  if (!savedAuth.meta?.refresh) {
+    removeSavedAccount(savedAuth.uuid);
     return { ok: false, message: "Session expired. Please sign in again." };
   }
 
-  if (!pendingRefresh) {
-    pendingRefresh = refreshAuth(refreshToken).finally(() => {
-      pendingRefresh = null;
-    });
+  if (!pendingRefresh.has(savedAuth.uuid)) {
+    pendingRefresh.set(
+      savedAuth.uuid,
+      refreshAuth(savedAuth).finally(() => pendingRefresh.delete(savedAuth.uuid))
+    );
   }
-  return pendingRefresh;
+  return pendingRefresh.get(savedAuth.uuid);
 }
 
-async function refreshAuth(refreshToken) {
+// `retry: true` means the account is still saved and the same Play works once Microsoft answers.
+async function refreshAuth(savedAuth) {
   try {
     const msmc = require("msmc");
     const authManager = new msmc.Auth({ client_id: MS_CLIENT_ID, redirect: MS_REDIRECT_URI });
-    const xbox = await authManager.refresh(refreshToken);
+    const xbox = await authManager.refresh(savedAuth.meta.refresh);
     const mc = await xbox.getMinecraft();
     if (mc.isDemo()) {
-      clearAuthProfile();
+      removeSavedAccount(savedAuth.uuid);
       return { ok: false, message: "This Microsoft account does not own Minecraft." };
     }
     const refreshedMclc = mc.mclc(true);
     saveAuthProfile(refreshedMclc);
     return { ok: true, profile: refreshedMclc };
   } catch (err) {
-    console.error("[Auth] Token refresh failed:", err.message);
-    clearAuthProfile();
-    return { ok: false, message: "Session expired. Please sign in again." };
+    console.error("[Auth] Token refresh failed:", err?.ts || err?.message, err?.response?.status ?? "");
+    if (accounts.isSignInRejected(err)) {
+      removeSavedAccount(savedAuth.uuid);
+      return { ok: false, message: "Session expired. Please sign in again." };
+    }
+    return {
+      ok: false,
+      retry: true,
+      message: "Can't reach Microsoft to refresh your sign-in. Check your connection and try again."
+    };
   }
+}
+
+const publicProfile = (auth) => (auth ? { name: auth.name, uuid: auth.uuid } : null);
+
+// Microsoft refused the active session: show the account that took over, or none.
+function reportSignedOut(message) {
+  currentMclcUser = loadSavedAuthProfile();
+  sendToRenderer("launcher:signed-out", { message, profile: publicProfile(currentMclcUser) });
 }
 
 function loginWithMicrosoft(parentWindow) {
@@ -674,9 +697,11 @@ ipcMain.handle("launcher:auth-get", async () => {
   currentMclcUser = session;
   if (isExpiringSoon(session)) {
     ensureValidAuth(session).then((check) => {
-      currentMclcUser = check.ok ? check.profile : null;
-      if (!check.ok) {
-        sendToRenderer("launcher:signed-out", { message: check.message });
+      if (check.ok) {
+        currentMclcUser = check.profile;
+      } else if (!check.retry) {
+        // Offline keeps the account on screen; Play explains if it still can't refresh.
+        reportSignedOut(check.message);
       }
     });
   }
@@ -1048,10 +1073,12 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
     const saved = loadSavedAuthProfile();
     if (saved) {
       const valid = await ensureValidAuth(saved);
-      if (valid.ok) {
-        authToUse = valid.profile;
-        currentMclcUser = valid.profile;
+      if (!valid.ok) {
+        if (!valid.retry) reportSignedOut(valid.message);
+        return { ok: false, message: valid.message };
       }
+      authToUse = valid.profile;
+      currentMclcUser = valid.profile;
     }
   }
 
@@ -1064,6 +1091,7 @@ ipcMain.handle("launcher:start", async (_event, launchConfig) => {
 
   const freshCheck = await ensureValidAuth(authToUse);
   if (!freshCheck.ok) {
+    if (!freshCheck.retry) reportSignedOut(freshCheck.message);
     return {
       ok: false,
       message: freshCheck.message || "Authentication expired. Please sign in again."
