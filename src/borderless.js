@@ -25,26 +25,59 @@ function writeFullscreen(gameDir, value) {
   fs.writeFileSync(path.join(gameDir, "options.txt"), options.replace(FULLSCREEN_LINE, `fullscreen:${value}`));
 }
 
+// Marker content once the game saved fullscreen:true mid-session: the player switched it in
+// game (F11 or Video Settings), so whatever the game saves last is their own choice.
+const PLAYER_CHOICE = "player";
+const watchers = new Map();
+
+// The game believes it is windowed, so turning fullscreen on in game is the only switch the
+// player can make; it shows up as a save of fullscreen:true.
+function watchPlayerChoice(gameDir) {
+  if (watchers.has(gameDir)) return;
+  const optionsPath = path.join(gameDir, "options.txt");
+  const onChange = () => {
+    if (FULLSCREEN_LINE.exec(readOptions(gameDir) || "")?.[1] !== "true") return;
+    try {
+      fs.writeFileSync(path.join(gameDir, MARKER), PLAYER_CHOICE);
+    } catch (_error) {
+      // the session may be ending
+    }
+  };
+  fs.watchFile(optionsPath, { interval: 500 }, onChange);
+  watchers.set(gameDir, () => fs.unwatchFile(optionsPath, onChange));
+}
+
 // Returns true when this launch should go borderless. Flips options.txt to windowed if
 // that is where fullscreen came from (F11 or Video Settings).
 function beginBorderless(gameDir, launcherFullscreen) {
   const marker = path.join(gameDir, MARKER);
-  if (fs.existsSync(marker)) return true;
+  if (fs.existsSync(marker)) {
+    if (fs.readFileSync(marker, "utf8") !== PLAYER_CHOICE) {
+      watchPlayerChoice(gameDir);
+      return true;
+    }
+    // The last session ended on the player's own choice but was never closed out.
+    fs.rmSync(marker, { force: true });
+  }
   const optionsFullscreen = FULLSCREEN_LINE.exec(readOptions(gameDir) || "")?.[1] === "true";
   if (optionsFullscreen) {
     fs.writeFileSync(marker, "");
     writeFullscreen(gameDir, false);
+    watchPlayerChoice(gameDir);
     return true;
   }
   return Boolean(launcherFullscreen);
 }
 
-// Game closed: put fullscreen back in options.txt so the game's own setting stays on.
+// Game closed: put fullscreen back in options.txt so the game's own setting stays on,
+// unless the player switched it in game.
 function endBorderless(gameDir) {
+  watchers.get(gameDir)?.();
+  watchers.delete(gameDir);
   const marker = path.join(gameDir, MARKER);
   if (!fs.existsSync(marker)) return;
   try {
-    writeFullscreen(gameDir, true);
+    if (fs.readFileSync(marker, "utf8") !== PLAYER_CHOICE) writeFullscreen(gameDir, true);
   } finally {
     fs.rmSync(marker, { force: true });
   }

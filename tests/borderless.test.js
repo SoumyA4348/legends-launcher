@@ -49,6 +49,21 @@ test("a launch that never restored is still treated as fullscreen", (t) => {
   assert.equal(readOptions(dir), "fullscreen:true\n");
 });
 
+test("switching to windowed in game is kept after quitting", async (t) => {
+  const dir = makeGameDir(t, "fullscreen:true\nfov:0.0\n");
+  beginBorderless(dir, false);
+  const gameSaves = (value) => fs.writeFileSync(path.join(dir, "options.txt"), `fullscreen:${value}\nfov:0.0\n`);
+  const playerPause = () => new Promise((resolve) => setTimeout(resolve, 1100));
+  gameSaves(true); // F11: fullscreen
+  await playerPause();
+  gameSaves(false); // F11 again: windowed
+  await playerPause();
+  endBorderless(dir);
+  assert.equal(readOptions(dir), "fullscreen:false\nfov:0.0\n");
+  // and the next launch stays windowed
+  assert.equal(beginBorderless(dir, false), false);
+});
+
 test("game saving options mid-session doesn't lose fullscreen", (t) => {
   const dir = makeGameDir(t, "fullscreen:true\nfov:0.0\n");
   beginBorderless(dir, false);
