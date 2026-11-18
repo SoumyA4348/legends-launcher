@@ -15,6 +15,18 @@ test("normalizeStore migrates a single saved account and drops junk", () => {
   assert.equal(mixed.active, "b");
 });
 
+test("only a refusal from Microsoft or Mojang counts as a rejected sign-in", () => {
+  // Shapes msmc 5 throws (checked 2026-11-18).
+  assert.equal(accounts.isSignInRejected({ ts: "error.auth.microsoft", response: { status: 400 } }), true);
+  assert.equal(accounts.isSignInRejected({ ts: "error.auth.xsts", response: { status: 401 } }), true);
+  assert.equal(accounts.isSignInRejected({ ts: "error.auth.minecraft.profile", response: { status: 404 } }), true);
+  const offline = Object.assign(new Error("getaddrinfo ENOTFOUND login.live.com"), { name: "FetchError", code: "ENOTFOUND" });
+  assert.equal(accounts.isSignInRejected(offline), false);
+  assert.equal(accounts.isSignInRejected({ ts: "error.auth.xsts", response: { status: 503 } }), false);
+  assert.equal(accounts.isSignInRejected({ ts: "error.auth.minecraft.login", response: { status: 429 } }), false);
+  assert.equal(accounts.isSignInRejected(undefined), false);
+});
+
 test("upsert, switch and remove keep one active account", () => {
   let store = accounts.normalizeStore(null);
   store = accounts.upsertAccount(store, auth("a"));

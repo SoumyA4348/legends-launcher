@@ -60,4 +60,21 @@ function listAccounts(store) {
   }));
 }
 
-module.exports = { normalizeStore, activeAccount, upsertAccount, removeAccount, switchAccount, listAccounts, MAX_ACCOUNTS };
+// A refresh Microsoft or Mojang actually refused (expired or revoked sign-in, no Minecraft on the
+// account) ends that session. No network, a timeout or a 5xx/429 outage is not a refusal: the
+// account stays saved and works again once they answer. msmc puts the HTTP reply on `response`.
+function isSignInRejected(error) {
+  const status = error?.response?.status;
+  return status === 400 || status === 401 || status === 403 || error?.ts === "error.auth.minecraft.profile";
+}
+
+module.exports = {
+  normalizeStore,
+  activeAccount,
+  upsertAccount,
+  removeAccount,
+  switchAccount,
+  listAccounts,
+  isSignInRejected,
+  MAX_ACCOUNTS
+};
