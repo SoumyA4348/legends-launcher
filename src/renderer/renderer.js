@@ -1061,7 +1061,9 @@ async function refreshServerStatus() {
   if (status.online) {
     $("serverStateText").textContent = "Online";
     $("serverPlayers").textContent =
-      status.playersOnline != null ? `${status.playersOnline.toLocaleString()} / ${status.playersMax.toLocaleString()}` : "—";
+      status.playersOnline != null && status.playersMax != null
+        ? `${status.playersOnline.toLocaleString()} / ${status.playersMax.toLocaleString()}`
+        : "—";
     $("serverPing").textContent = `${status.latencyMs} ms`;
     if (status.favicon) $("serverIcon").src = status.favicon;
     else $("serverIcon").removeAttribute("src");

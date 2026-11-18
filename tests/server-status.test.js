@@ -82,3 +82,58 @@ test("pingServer reports offline for a closed port", async () => {
   assert.equal(result.online, false);
   assert.ok(result.error);
 });
+
+// A TCP server for one test that runs `onSocket` per connection and is torn down afterwards.
+async function serve(t, onSocket) {
+  const sockets = new Set();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    onSocket(socket);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    for (const socket of sockets) socket.destroy();
+    server.close();
+  });
+  return server.address().port;
+}
+
+test("pingServer reports offline when the server hangs up without answering", async (t) => {
+  const port = await serve(t, (socket) => socket.end());
+  const result = await status.pingServer("127.0.0.1", port, 2000);
+  assert.equal(result.online, false);
+});
+
+test("pingServer reports offline when the port is a web server", async (t) => {
+  const port = await serve(t, (socket) => socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
+  const result = await status.pingServer("127.0.0.1", port, 2000);
+  assert.equal(result.online, false);
+});
+
+test("pingServer gives up at its deadline even while bytes trickle in", async (t) => {
+  const port = await serve(t, (socket) => {
+    socket.write(Buffer.from([0x64])); // promises a 100-byte reply
+    const drip = setInterval(() => socket.write(Buffer.from([0x20])), 200);
+    socket.on("close", () => clearInterval(drip));
+  });
+  const startedAt = Date.now();
+  const result = await status.pingServer("127.0.0.1", port, 1000);
+  assert.deepEqual(result, { online: false, error: "Timed out" });
+  assert.ok(Date.now() - startedAt < 2000);
+});
+
+test("a reply far over the protocol limit is refused before it fills memory", async (t) => {
+  assert.throws(() => status.parseStatusResponse(Buffer.from([0xff, 0xff, 0xff, 0x7f])), /too large/);
+  const port = await serve(t, (socket) => {
+    socket.write(Buffer.from([0xff, 0xff, 0xff, 0x7f])); // claims 268 MB
+    socket.write(Buffer.alloc(1024 * 1024, 0x20));
+  });
+  const result = await status.pingServer("127.0.0.1", port, 2000);
+  assert.deepEqual(result, { online: false, error: "Invalid server response" });
+});
+
+test("a server that leaves out its player limit shows no player count", () => {
+  const parsed = status.parseStatusResponse(frame({ description: "x", players: { online: 3 } }));
+  assert.equal(parsed.playersMax, null);
+});

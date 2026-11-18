@@ -59,8 +59,13 @@ function motdToText(description) {
   return walk(description).replace(/§./g, "").trim();
 }
 
+// The protocol caps the status JSON at 32767 characters, so a real reply is well under this.
+// A bigger claim isn't a Minecraft server and is refused instead of buffered.
+const MAX_RESPONSE_BYTES = 256 * 1024;
+
 function parseStatusResponse(buffer) {
   const length = decodeVarInt(buffer, 0);
+  if (length && (length.value < 0 || length.value > MAX_RESPONSE_BYTES)) throw new Error("Status reply too large");
   if (!length || buffer.length < length.size + length.value) return null;
   let offset = length.size;
   const id = decodeVarInt(buffer, offset);
@@ -72,8 +77,8 @@ function parseStatusResponse(buffer) {
     online: true,
     motd: motdToText(json.description),
     version: json.version?.name || null,
-    playersOnline: json.players?.online ?? null,
-    playersMax: json.players?.max ?? null,
+    playersOnline: Number.isFinite(json.players?.online) ? json.players.online : null,
+    playersMax: Number.isFinite(json.players?.max) ? json.players.max : null,
     favicon: typeof json.favicon === "string" && json.favicon.startsWith("data:image/png;base64,") ? json.favicon : null
   };
 }
@@ -96,13 +101,21 @@ async function pingServer(host, port = 25565, timeoutMs = 5000) {
     const socket = net.createConnection({ host: target.host, port: target.port });
     let received = Buffer.alloc(0);
     let startedAt = 0;
+    let settled = false;
     const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
       socket.destroy();
       resolve(result);
     };
 
-    socket.setTimeout(timeoutMs, () => finish({ online: false, error: "Timed out" }));
+    // One deadline for the whole exchange: an idle timeout never fires while a server sends a
+    // byte every few seconds.
+    const deadline = setTimeout(() => finish({ online: false, error: "Timed out" }), timeoutMs);
     socket.on("error", (error) => finish({ online: false, error: error.code || error.message }));
+    // Hung up before a full reply: a proxy with the server down, a restart, or not Minecraft.
+    socket.on("close", () => finish({ online: false, error: "No response" }));
     socket.on("connect", () => {
       startedAt = Date.now();
       socket.write(buildHandshake(host, target.port));
