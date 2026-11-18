@@ -107,15 +107,29 @@ test("readManagedModsState handles missing, legacy-array and corrupt files", (t)
   assert.deepEqual(launcher.readManagedModsState(dir).files, []);
 });
 
-test("pruneManagedMods removes only unselected .jar files", (t) => {
+test("pruneManagedMods removes only old jars it installed, never the player's own", (t) => {
   const dir = makeTempDir(t);
   const modsDir = path.join(dir, "mods");
   fs.mkdirSync(modsDir);
-  for (const name of ["keep.jar", "stale.jar", "notes.txt"]) {
+  for (const name of ["keep.jar", "stale.jar", "my-own-mod.jar", "notes.txt"]) {
     fs.writeFileSync(path.join(modsDir, name), "x");
   }
+  fs.writeFileSync(path.join(dir, ".launcher-managed-mods.json"), JSON.stringify({ files: ["keep.jar", "stale.jar"] }));
   launcher.pruneManagedMods(dir, ["keep.jar"], silentHooks());
-  assert.deepEqual(fs.readdirSync(modsDir).sort(), ["keep.jar", "notes.txt"]);
+  assert.deepEqual(fs.readdirSync(modsDir).sort(), ["keep.jar", "my-own-mod.jar", "notes.txt"]);
+});
+
+test("a damaged jar the player added is reported, not deleted", (t) => {
+  const dir = makeTempDir(t);
+  const modsDir = path.join(dir, "mods");
+  fs.mkdirSync(modsDir);
+  fs.writeFileSync(path.join(modsDir, "my-own-mod.jar"), "not a zip");
+  fs.writeFileSync(path.join(modsDir, "sodium.jar"), "not a zip");
+  fs.writeFileSync(path.join(dir, ".launcher-managed-mods.json"), JSON.stringify({ files: ["sodium.jar"] }));
+  const hooks = silentHooks();
+  launcher.validateAndRepairMods(dir, hooks);
+  assert.deepEqual(fs.readdirSync(modsDir), ["my-own-mod.jar"]); // the launcher's copy downloads again
+  assert.ok(hooks.messages.some((message) => message.includes("my-own-mod.jar")));
 });
 
 test("mapLimit preserves order and never exceeds the concurrency limit", async () => {

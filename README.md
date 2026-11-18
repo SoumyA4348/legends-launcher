@@ -14,7 +14,7 @@ A one-click Minecraft: Java Edition launcher for Windows. Sign in with Microsoft
   - *Full*: adds Mod Menu, Reese's Sodium Options, Sodium Extra, Fabric Language Kotlin, YACL, Zoomify
 - **Instances**: separate setups (version, profile, mods, worlds, options) that share downloaded game files, so a new instance sets up in seconds. Your original setup becomes the *Default* instance.
 - **Add any Modrinth mod**: search Fabric mods for the instance's version from the Mods tab; required dependencies are installed automatically.
-- **Self-repair**: corrupted library/mod jars are detected and re-downloaded; stale mods are cleaned when the version changes.
+- **Self-repair**: corrupted library/mod jars are detected and re-downloaded; stale mods are cleaned when the version changes. Mods you add to the folder by hand are never removed.
 - **Fast relaunch**: files that already passed their check are only re-checked when they change, mod updates are looked up once a day, and the game starts offline with your installed mods when Modrinth or Fabric can't be reached.
 - **Stop button and crash reports**: stop the game from the launcher; if Minecraft crashes, the launcher comes back and opens the crash report in one click.
 - **Game options**: window size, fullscreen, and keep the launcher open or minimized while playing. Your own video settings (render distance, VSync, FPS cap) are never overwritten; performance defaults only fill in settings you haven't set.
