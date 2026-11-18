@@ -928,9 +928,19 @@ ipcMain.handle("launcher:review-submit", async (_event, rating, comment) => {
   if (!id || !Number.isInteger(stars) || stars < 1 || stars > 5) {
     return { ok: false, message: "Sign in and pick a rating first." };
   }
+  const auth = await ensureValidAuth(currentMclcUser);
+  if (!auth.ok) {
+    return { ok: false, message: auth.message };
+  }
+  currentMclcUser = auth.profile;
+  const notConfirmed = "Mojang couldn't confirm your Minecraft account, so the review wasn't sent.";
   try {
+    // Mojang vouches for the player (see review.joinSession); the website gets the username only.
+    const serverId = review.newServerId();
+    await review.joinSession({ accessToken: auth.profile.access_token, uuid: auth.profile.uuid, serverId });
     const res = await review.submitReview(REVIEWS_URL, {
-      player: id,
+      username: auth.profile.name,
+      serverId,
       rating: stars,
       comment: String(comment || "").slice(0, 500),
       version: require("./package.json").version
@@ -942,14 +952,20 @@ ipcMain.handle("launcher:review-submit", async (_event, rating, comment) => {
       if (res.ok) track("review_submitted", { rating: stars });
       return { ok: res.ok, already: res.status === 409 };
     }
-    return {
-      ok: false,
-      message: res.status === 429 ? "Too many reviews from your network today. Try again tomorrow." : "Couldn't send your review. Try again later."
+    const messages = {
+      403: notConfirmed,
+      429: "Too many reviews from your network today. Try again tomorrow."
     };
+    return { ok: false, message: messages[res.status] || "Couldn't send your review. Try again later." };
   } catch (error) {
     return {
       ok: false,
-      message: error.statusCode ? "Couldn't send your review. Try again later." : "Couldn't reach the review server. Check your connection."
+      message:
+        error.statusCode === 403
+          ? notConfirmed
+          : error.statusCode
+            ? "Couldn't send your review. Try again later."
+            : "Couldn't reach the review server. Check your connection."
     };
   }
 });
